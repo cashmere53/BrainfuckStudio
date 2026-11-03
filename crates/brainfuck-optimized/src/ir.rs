@@ -57,9 +57,7 @@ pub struct Op {
 }
 
 impl Op {
-    /// 操作を内部で構築する。現時点では呼び出し元が無いため一時的に未使用を許可し、
-    /// 変換器の実装で除去する。
-    #[allow(dead_code)]
+    /// 操作を内部で構築する(変換器のみが使う)。
     pub(crate) fn new(kind: OpKind, source_start: usize, source_len: usize) -> Op {
         Op {
             kind,
@@ -87,9 +85,7 @@ pub struct OptimizedProgram {
 }
 
 impl OptimizedProgram {
-    /// 元の解析結果と操作列から組み立てる。現時点では呼び出し元が無いため
-    /// 一時的に未使用を許可し、変換器の実装で除去する。
-    #[allow(dead_code)]
+    /// 元の解析結果と操作列から組み立てる(変換器のみが使う)。
     pub(crate) fn from_parts(source: Program, ops: Vec<Op>) -> OptimizedProgram {
         OptimizedProgram { source, ops }
     }
