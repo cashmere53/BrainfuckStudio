@@ -9,4 +9,5 @@ pub mod instruction;
 pub mod machine;
 pub mod parser;
 
+pub use error::{ParseError, PointerDirection, RuntimeError};
 pub use instruction::Instruction;
