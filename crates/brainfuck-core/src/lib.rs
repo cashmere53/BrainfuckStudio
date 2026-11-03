@@ -106,12 +106,30 @@
 
 #![forbid(unsafe_code)]
 
+pub mod breakpoint;
+pub mod cancel;
 pub mod error;
 pub mod instruction;
 pub mod machine;
 pub mod parser;
+pub mod session;
+pub mod source_map;
+pub mod view;
 
 pub use error::{ParseError, PointerDirection, RuntimeError};
 pub use instruction::Instruction;
 pub use machine::{Machine, MachineConfig, MachineSnapshot, StepResult, StopReason, TAPE_SIZE};
 pub use parser::Program;
+
+// デバッグ拡張の公開項目は各モジュールから glob で再公開する。
+// 現時点では各モジュールが空のため、再公開先が無い警告を抑止する(5.1 で整理する)。
+#[allow(unused_imports)]
+pub use breakpoint::*;
+#[allow(unused_imports)]
+pub use cancel::*;
+#[allow(unused_imports)]
+pub use session::*;
+#[allow(unused_imports)]
+pub use source_map::*;
+#[allow(unused_imports)]
+pub use view::*;
