@@ -174,7 +174,7 @@
   - _Boundary: Test suite (tests/exit_codes.rs のみ。共通の `common/mod.rs` は 5.1 の所有で編集しない)_
   - _Requirements: 3.6, 8.1, 8.2, 8.3, 8.4, 8.5, 8.7, 8.8, 9.1, 9.2, 9.3, 9.4, 9.5, 9.7, 12.1, 12.4, 12.7_
 
-- [ ] 6.7 (P) サンプル・README・core との一致の結合テストを追加する
+- [x] 6.7 (P) サンプル・README・core との一致の結合テストを追加する
   - `examples/hello.bf` を既定オプションで実行すると、標準出力がちょうど `Hello World!\n`、標準エラーが空、終了コード 0 になることを検証する。標準入力を「書かず閉じない」状態にしても時間内に終了することを検証する
   - `--dump-state` で `state: pc=106 dp=6 steps=906` が標準エラーに出ることを回帰オラクルとして検証する
   - README の内容(`include_str!` で取り込み)に、`cargo test --workspace` と `cargo run -p brainfuck-cli -- examples/hello.bf` の両方、全オプション名、終了コード表が含まれることを検証する
