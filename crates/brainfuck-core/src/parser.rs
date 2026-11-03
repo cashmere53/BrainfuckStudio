@@ -119,8 +119,6 @@ impl Program {
     /// 括弧対応表の全体を返す。crate 内部専用で、機械が括弧命令の位置でのみ読む。
     ///
     /// 括弧以外の要素の値は未規定であり、公開 API からは読めない。
-    /// 機械の実装(後続タスク)が使用するまでは未使用となるため、警告を抑止する。
-    #[allow(dead_code)]
     pub(crate) fn jump_table(&self) -> &[usize] {
         &self.jump_table
     }

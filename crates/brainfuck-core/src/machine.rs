@@ -183,10 +183,24 @@ impl Machine {
                     None => self.tape[self.dp] = 0,
                 }
             }
-            // ループ命令は後続タスク(4.5)で実装する。
-            _ => unimplemented!("この命令の実行規則は後続タスクで実装する"),
+            // ループ開始: セルが 0 なら対応する `]` の次へ進む。非 0 なら次の命令へ進む。
+            // 括弧対応表の参照のみを使い、括弧を探索しない。セルと dp は変更しない。
+            // 対応する `]` の添字を `pc` に設定し、末尾の `pc += 1` で `]` の次へ進ませる。
+            Instruction::LoopStart => {
+                if self.tape[self.dp] == 0 {
+                    self.pc = self.program.jump_table()[self.pc];
+                }
+            }
+            // ループ終了: セルが非 0 なら対応する `[` の次へ戻る。0 なら次の命令へ進む。
+            // 対応する `[` の添字を `pc` に設定し、末尾の `pc += 1` で `[` の次へ戻らせる。
+            Instruction::LoopEnd => {
+                if self.tape[self.dp] != 0 {
+                    self.pc = self.program.jump_table()[self.pc];
+                }
+            }
         }
         // 検証と状態更新が成功した場合のみ、実行数と `pc` を進める。
+        // ループ命令は `pc` を対応先に設定しているため、ここでの加算により対応先の次へ進む。
         self.steps_executed = self.steps_executed.saturating_add(1);
         self.pc += 1;
         Ok(StepResult::Executed)
