@@ -1,6 +1,6 @@
 //! 解析(`Program`)の統合テスト。crate ルート直下のパスのみを使う。
 
-use brainfuck_core::{Instruction, Program};
+use brainfuck_core::{Instruction, ParseError, Program};
 
 #[test]
 fn extracts_only_instruction_characters_in_source_order() {
@@ -157,4 +157,197 @@ fn str_input_and_byte_input_produce_same_instructions_and_offsets() {
     assert_eq!(from_str.instructions(), from_bytes.instructions());
     assert_eq!(from_str.source_offsets(), from_bytes.source_offsets());
     assert_eq!(from_str.len(), from_bytes.len());
+}
+
+#[test]
+fn simple_pair_matches_each_other() {
+    // 0: '[', 1: '-', 2: ']'
+    let program = Program::parse("[-]").expect("括弧は対応している");
+    assert_eq!(program.matching_bracket(0), Some(2));
+    assert_eq!(program.matching_bracket(2), Some(0));
+}
+
+#[test]
+fn empty_loop_pair_matches_each_other() {
+    // 0: '[', 1: ']'
+    let program = Program::parse("[]").expect("括弧は対応している");
+    assert_eq!(program.matching_bracket(0), Some(1));
+    assert_eq!(program.matching_bracket(1), Some(0));
+}
+
+#[test]
+fn nested_pairs_match_from_inside_out() {
+    // 0: '[', 1: '[', 2: '-', 3: ']', 4: '+', 5: ']'
+    let program = Program::parse("[[-]+]").expect("括弧は対応している");
+    assert_eq!(program.matching_bracket(0), Some(5));
+    assert_eq!(program.matching_bracket(1), Some(3));
+    assert_eq!(program.matching_bracket(3), Some(1));
+    assert_eq!(program.matching_bracket(5), Some(0));
+}
+
+#[test]
+fn parallel_pairs_match_independently() {
+    // 0: '[', 1: '-', 2: ']', 3: '[', 4: '+', 5: ']'
+    let program = Program::parse("[-][+]").expect("括弧は対応している");
+    assert_eq!(program.matching_bracket(0), Some(2));
+    assert_eq!(program.matching_bracket(2), Some(0));
+    assert_eq!(program.matching_bracket(3), Some(5));
+    assert_eq!(program.matching_bracket(5), Some(3));
+}
+
+#[test]
+fn matching_bracket_is_symmetric_for_every_bracket() {
+    let program = Program::parse("+[>[-]<+]>[[]]").expect("括弧は対応している");
+    for (index, instruction) in program.instructions().iter().enumerate() {
+        match instruction {
+            Instruction::LoopStart | Instruction::LoopEnd => {
+                let partner = program
+                    .matching_bracket(index)
+                    .unwrap_or_else(|| panic!("括弧 {index} に対応先がない"));
+                assert_eq!(program.matching_bracket(partner), Some(index));
+            }
+            _ => assert_eq!(program.matching_bracket(index), None),
+        }
+    }
+}
+
+#[test]
+fn non_bracket_and_out_of_range_queries_return_none() {
+    let program = Program::parse("[+]").expect("括弧は対応している");
+    assert_eq!(program.matching_bracket(1), None);
+    assert_eq!(program.matching_bracket(3), None);
+    assert_eq!(program.matching_bracket(usize::MAX), None);
+    let empty = Program::parse("").expect("空入力は成功する");
+    assert_eq!(empty.matching_bracket(0), None);
+}
+
+#[test]
+fn lone_closing_bracket_is_reported_at_first_position() {
+    assert_eq!(
+        Program::parse("]"),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 0,
+            source_offset: 0,
+        })
+    );
+}
+
+#[test]
+fn extra_closing_bracket_after_pair_is_reported() {
+    // 0: '[', 1: ']', 2: ']'(対応する '[' が無い)
+    assert_eq!(
+        Program::parse("[]]"),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 2,
+            source_offset: 2,
+        })
+    );
+}
+
+#[test]
+fn closing_bracket_is_reported_before_later_unmatched_opening() {
+    // 最初に見つかるのは走査中の ']'(添字 0)。'[' の不一致より優先される。
+    assert_eq!(
+        Program::parse("][["),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 0,
+            source_offset: 0,
+        })
+    );
+}
+
+#[test]
+fn surplus_closing_bracket_after_nested_pairs_is_reported_at_scan_position() {
+    // "[[]]]" の 4 番目(添字 4)が最初の不一致。
+    assert_eq!(
+        Program::parse("[[]]]"),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 4,
+            source_offset: 4,
+        })
+    );
+}
+
+#[test]
+fn double_opening_bracket_reports_first_unresolved_opening() {
+    // 0: '[', 1: '['。両方が未解決で、最初の '[' を報告する。
+    assert_eq!(
+        Program::parse("[["),
+        Err(ParseError::UnmatchedOpeningBracket {
+            instruction_index: 0,
+            source_offset: 0,
+        })
+    );
+}
+
+#[test]
+fn partially_closed_openings_report_earliest_unresolved_opening() {
+    // "[[]" では '[' (添字 1) が閉じ、添字 0 の '[' が残る。
+    assert_eq!(
+        Program::parse("[[]"),
+        Err(ParseError::UnmatchedOpeningBracket {
+            instruction_index: 0,
+            source_offset: 0,
+        })
+    );
+}
+
+#[test]
+fn earliest_unresolved_opening_is_chosen_over_later_ones() {
+    // 0: '+', 1: '[' (offset 1), 2: '-', 3: '[' (offset 3), 4: ']' (offset 4)
+    // 解決されるのは添字 3 の '['。残る未解決は添字 1 の '[' のみ。
+    assert_eq!(
+        Program::parse("+[-[]"),
+        Err(ParseError::UnmatchedOpeningBracket {
+            instruction_index: 1,
+            source_offset: 1,
+        })
+    );
+}
+
+#[test]
+fn bracket_errors_are_identical_for_str_and_byte_input() {
+    for sample in ["]", "[]]", "[[", "[[]", "][", "+[-[]"] {
+        assert_eq!(
+            Program::parse(sample),
+            Program::parse_bytes(sample.as_bytes()),
+            "sample {sample:?}"
+        );
+    }
+}
+
+#[test]
+fn closing_bracket_after_non_utf8_bytes_reports_input_byte_offset() {
+    // 0xFF(offset 0), '+'(offset 1), 0xFE(offset 2), ']'(offset 3)
+    assert_eq!(
+        Program::parse_bytes(&[0xFF, b'+', 0xFE, b']']),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 1,
+            source_offset: 3,
+        })
+    );
+}
+
+#[test]
+fn opening_bracket_after_non_utf8_bytes_reports_input_byte_offset() {
+    // 0x80(offset 0), '['(offset 1), 0xFF(offset 2)
+    assert_eq!(
+        Program::parse_bytes(&[0x80, b'[', 0xFF]),
+        Err(ParseError::UnmatchedOpeningBracket {
+            instruction_index: 0,
+            source_offset: 1,
+        })
+    );
+}
+
+#[test]
+fn closing_bracket_after_multibyte_text_reports_byte_offset() {
+    // 「あ」は 3 バイトなので ']' のバイト位置は 3。
+    assert_eq!(
+        Program::parse("あ]"),
+        Err(ParseError::UnmatchedClosingBracket {
+            instruction_index: 0,
+            source_offset: 3,
+        })
+    );
 }
