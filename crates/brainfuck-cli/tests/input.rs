@@ -21,6 +21,17 @@ const ECHO_EXPECTED: [u8; 3] = [0xFF, 0x0A, 0x41];
 /// 入力命令を含まないプログラム。セル 0 に 65(`A`)を作って出力する。
 const NO_INPUT_PROGRAM: &[u8] = b"++++++++[>++++++++<-]>+.";
 
+/// 0x00 から 0xFF までの全 256 値(昇順)。
+fn all_byte_values() -> Vec<u8> {
+    (0..=255u8).collect()
+}
+
+/// `,.` を 256 個並べたエコープログラム(512 バイト)。`,[.,]` と違い 0x00 で止まらない。
+/// 1 組ごとに 1 バイト読んで直ちに出力するため、入力 256 バイトがそのまま出力される。
+fn echo_256_program() -> Vec<u8> {
+    b",.".repeat(256)
+}
+
 #[test]
 fn echo_from_stdin_stops_before_first_nul_byte() {
     let echo = fixture_path("fixtures/echo.bf");
@@ -75,6 +86,47 @@ fn nul_byte_from_input_is_passed_through_unchanged() {
 
     assert_eq!(output.code, Some(0));
     assert_eq!(output.stdout, [0x00]);
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn all_256_byte_values_echo_from_stdin_unchanged() {
+    // 0x00 と 0xFF を含む全 256 値を標準入力から与え、`,.`×256 で同一バイト列が出ることを確かめる。
+    let program = write_temp("input-echo-256-stdin.bf", &echo_256_program());
+    let bytes = all_byte_values();
+    let output = run_cli(&[program.as_os_str()], StdinMode::Bytes(bytes.clone()));
+
+    assert_eq!(
+        output.code,
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, bytes);
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn all_256_byte_values_echo_from_input_file_unchanged() {
+    // 同じ全 256 値を `--input` で与え、標準入力を閉じずに同一バイト列が出ることを確かめる。
+    let program = write_temp("input-echo-256-file-prog.bf", &echo_256_program());
+    let input = write_temp("input-all-256-bytes.bin", &all_byte_values());
+    let output = run_cli(
+        &[
+            program.as_os_str(),
+            OsStr::new("--input"),
+            input.as_os_str(),
+        ],
+        StdinMode::OpenUnused,
+    );
+
+    assert_eq!(
+        output.code,
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, all_byte_values());
     assert!(output.stderr.is_empty());
 }
 

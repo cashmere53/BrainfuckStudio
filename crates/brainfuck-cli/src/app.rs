@@ -212,10 +212,17 @@ mod tests {
     }
 
     #[test]
-    fn unlimited_run_completes_past_default_style_limits() {
-        let report = run_program(program(b"+++"), Vec::new(), None);
-        assert!(report.result.is_ok());
-        assert_eq!(report.snapshot.steps_executed, 3);
+    fn unlimited_run_exceeds_default_limit_and_completes_with_exact_steps() {
+        // `-[>-[>-[-]<-]<-]` の実行数は手計算で 2^25 = 33554432(既定上限 10,000,000 を超える)。
+        // 内側の `[-]` は 1 ループあたり `-` と `]` の 2 命令(`[` は入口で 1 回のみ)。
+        // 外側 1 周は 131586 命令、外側ループは 255 周、前後の `-` と `[` で +2。
+        // 255 × 131586 + 2 = 33554432。停止時の pc は命令数 16、dp は 0 に戻る。
+        let report = run_program(program(b"-[>-[>-[-]<-]<-]"), Vec::new(), None);
+        assert!(report.result.is_ok(), "{:?}", report.result);
+        assert_eq!(report.snapshot.steps_executed, 33_554_432);
+        assert_eq!(report.snapshot.pc, 16);
+        assert_eq!(report.snapshot.data_pointer, 0);
+        assert!(report.output.is_empty());
     }
 
     #[test]

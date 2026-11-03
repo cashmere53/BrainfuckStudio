@@ -329,3 +329,52 @@ fn dump_state_is_not_printed_on_source_read_error() {
     assert!(output.stdout.is_empty());
     assert!(!text(&output.stderr).contains("state:"));
 }
+
+/// 存在しない入力ファイルのパス(テスト実行中に作らない)。
+fn absent_input_path() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("limits-never-created-input.bin")
+}
+
+#[test]
+fn dump_state_is_not_printed_when_input_file_missing_for_program_with_input_command() {
+    // 入力命令を含むプログラムで `--input` が読めない場合、実行に至らないため状態表示をしない。
+    let program = write_temp("limits-missing-input-with-comma.bf", b",.");
+    let absent = absent_input_path();
+    let output = run_cli(
+        &[
+            program.as_os_str(),
+            "--dump-state".as_ref(),
+            "--input".as_ref(),
+            absent.as_os_str(),
+        ],
+        StdinMode::Null,
+    );
+
+    assert_eq!(output.code, Some(4), "stderr: {}", text(&output.stderr));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("failed to read input file"), "{stderr}");
+    assert!(!stderr.contains("state:"), "{stderr}");
+}
+
+#[test]
+fn dump_state_is_not_printed_when_input_file_missing_for_program_without_input_command() {
+    // 入力命令を含まないプログラムでも、`--input` の読込失敗は終了コード 4 となり状態表示をしない。
+    let program = write_temp("limits-missing-input-no-comma.bf", b"+.");
+    let absent = absent_input_path();
+    let output = run_cli(
+        &[
+            program.as_os_str(),
+            "--dump-state".as_ref(),
+            "--input".as_ref(),
+            absent.as_os_str(),
+        ],
+        StdinMode::Null,
+    );
+
+    assert_eq!(output.code, Some(4), "stderr: {}", text(&output.stderr));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(stderr.contains("failed to read input file"), "{stderr}");
+    assert!(!stderr.contains("state:"), "{stderr}");
+}
