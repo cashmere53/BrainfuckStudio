@@ -453,7 +453,7 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 - `app.rs`: `classify_stop` の予約停止理由、書き込み失敗 `Write` で 4(実行エラー併記)、`--dump-state` が書き込み失敗時にも出る
 
 ### Performance
-- 通常のテストで重い実行は既定上限テスト 1 件(10,000,000 命令。デバッグビルドでも数秒以内)のみ。`--no-step-limit` の無制限動作は引数解決の単体テスト(`max_steps == None`)で担保し、長時間実行テストは作らない
+- 通常のテストで重い実行は計 3 件のみ。既定上限(10,000,000 命令)への到達テストが `tests/limits.rs` の 2 件(`default_limit_*`)、無制限実行の単体テストが `src/app.rs` の 1 件(33,554,432 命令、既定上限を超えて完走することを確認)。実測はデバッグビルドで各テスト 1 秒未満、合計 1 秒強。`--no-step-limit` の引数解決は単体テスト(`max_steps == None`)で担保し、これ以上の長時間実行テストは作らない
 
 ## Security Considerations
 

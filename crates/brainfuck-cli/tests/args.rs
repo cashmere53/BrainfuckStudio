@@ -448,6 +448,36 @@ fn non_utf8_max_steps_equals_value_is_usage_error_not_program_path() {
 
 #[cfg(any(unix, windows))]
 #[test]
+fn non_utf8_max_steps_equals_value_alone_is_invalid_value_not_missing_program() {
+    // プログラムパスが無い場合でも、最初の引数エラー(不正な値)が `missing program path` より優先される。
+    // `ParseState::finish` は保持した最初のエラーを、プログラムの欠落より先に返すため。
+    // 検証段で止まるので、ファイルの読込(終了コード 4)にも進まない。
+    let args = [non_utf8_after("--max-steps=")];
+    let output = run_cli(&args, StdinMode::OpenUnused);
+    assert_usage_error(&output, "invalid value for --max-steps");
+    let stderr = stderr_text(&output);
+    assert!(!stderr.contains("missing program path"), "{stderr}");
+    assert!(!stderr.contains("program file"), "{stderr}");
+    assert!(!stderr.contains("failed to read"), "{stderr}");
+    assert_ne!(output.code, Some(4), "stderr: {stderr}");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn non_utf8_max_steps_equals_value_with_valid_program_does_not_run_it() {
+    // 実在するプログラムを併記しても、引数エラーのため実行されず `Hello World!` は出ない。
+    let args = [non_utf8_after("--max-steps="), hello()];
+    let output = run_cli(&args, StdinMode::OpenUnused);
+    assert_usage_error(&output, "invalid value for --max-steps");
+    assert!(
+        !output.stdout.windows(5).any(|window| window == b"Hello"),
+        "program must not run: {:?}",
+        output.stdout
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
 fn non_utf8_unknown_equals_option_is_usage_error_not_program_path() {
     let args = [non_utf8_after("--frob="), OsString::from(MISSING_PROGRAM)];
     let output = run_cli(&args, StdinMode::Null);
