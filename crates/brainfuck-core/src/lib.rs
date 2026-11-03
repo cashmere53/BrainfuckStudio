@@ -11,4 +11,5 @@ pub mod parser;
 
 pub use error::{ParseError, PointerDirection, RuntimeError};
 pub use instruction::Instruction;
+pub use machine::{Machine, MachineConfig, MachineSnapshot, StepResult, StopReason, TAPE_SIZE};
 pub use parser::Program;
