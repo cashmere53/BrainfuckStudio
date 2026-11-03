@@ -1,6 +1,6 @@
 //! 命令の遷移テスト。
 //!
-//! 本ファイルでは加算・減算のみを扱う。ポインタ移動・入出力・ループ命令を
+//! 本ファイルでは加算・減算・ポインタ移動を扱う。入出力・ループ命令を
 //! 実行するプログラムは使わない(後続タスクで扱う)。
 
 mod common;
@@ -77,4 +77,31 @@ fn arithmetic_changes_only_the_current_cell() {
         "dp 以外のセルは変更されない"
     );
     assert_eq!(machine.snapshot().data_pointer, 0);
+}
+
+#[test]
+fn move_right_increments_dp_and_advances_pc_without_changing_cells() {
+    let mut machine = machine_from(">", b"", MachineConfig::unlimited());
+    assert_eq!(machine.step(), Ok(StepResult::Executed));
+    let snapshot = machine.snapshot();
+    assert_eq!(snapshot.data_pointer, 1);
+    assert_eq!(snapshot.current_cell, 0);
+    assert_eq!(snapshot.pc, 1);
+    assert_eq!(snapshot.steps_executed, 1);
+    assert!(machine.tape().iter().all(|&cell| cell == 0));
+}
+
+#[test]
+fn move_left_decrements_dp_and_advances_pc_and_keeps_other_cells() {
+    let mut machine = machine_from(">+<", b"", MachineConfig::unlimited());
+    assert_eq!(machine.step(), Ok(StepResult::Executed));
+    assert_eq!(machine.step(), Ok(StepResult::Executed));
+    assert_eq!(machine.snapshot().data_pointer, 1);
+    assert_eq!(machine.step(), Ok(StepResult::Executed));
+    let snapshot = machine.snapshot();
+    assert_eq!(snapshot.data_pointer, 0);
+    assert_eq!(snapshot.current_cell, 0);
+    assert_eq!(snapshot.pc, 3);
+    assert_eq!(snapshot.steps_executed, 3);
+    assert_eq!(machine.tape()[1], 1, "移動先のセルの値は保持される");
 }

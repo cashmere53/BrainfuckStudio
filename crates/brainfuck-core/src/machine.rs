@@ -3,7 +3,7 @@
 //! 機械は 1 つの `Program` の実行状態(テープ、ポインタ、実行数、入出力)を保持する。
 //! 停止は `pc` が命令数と等しいことで表す。
 
-use crate::error::RuntimeError;
+use crate::error::{PointerDirection, RuntimeError};
 use crate::instruction::Instruction;
 use crate::parser::Program;
 
@@ -146,7 +146,29 @@ impl Machine {
                 let cell = &mut self.tape[self.dp];
                 *cell = cell.wrapping_sub(1);
             }
-            // ポインタ移動・入出力・ループ命令は後続タスク(4.3〜4.5)で実装する。
+            Instruction::MoveRight => {
+                // 検証段: 範囲外なら状態を変更せずに返す。
+                if self.dp >= TAPE_SIZE - 1 {
+                    return Err(RuntimeError::PointerOutOfBounds {
+                        pc: self.pc,
+                        dp: self.dp,
+                        direction: PointerDirection::Right,
+                    });
+                }
+                self.dp += 1;
+            }
+            Instruction::MoveLeft => {
+                // 検証段: 範囲外なら状態を変更せずに返す。
+                if self.dp == 0 {
+                    return Err(RuntimeError::PointerOutOfBounds {
+                        pc: self.pc,
+                        dp: self.dp,
+                        direction: PointerDirection::Left,
+                    });
+                }
+                self.dp -= 1;
+            }
+            // 入出力・ループ命令は後続タスク(4.4〜4.5)で実装する。
             _ => unimplemented!("この命令の実行規則は後続タスクで実装する"),
         }
         // 検証と状態更新が成功した場合のみ、実行数と `pc` を進める。
