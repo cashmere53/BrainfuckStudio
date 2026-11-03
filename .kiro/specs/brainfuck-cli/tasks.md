@@ -12,7 +12,7 @@
   - _Boundary: Crate_
   - _Requirements: 11.3, 11.4_
 
-- [ ] 1.2 (P) `examples/hello.bf` を用意する
+- [x] 1.2 (P) `examples/hello.bf` を用意する
   - 設計書の Example に記載した検証済みの Hello World 文字列(`,` を含まない 1 行、末尾改行あり)を `examples/hello.bf` に置く
   - リポジトリルートの `examples/` ディレクトリを新規に作成する(steering の構造に従う)。core には依存しない(実行しての出力検証は 4.4 と 6.7 が担当する)
   - ファイルが 1 行で、命令文字(`><+-.[]`)のみからなり、`,` を含まず、`[` と `]` の個数が一致することを検索で確認できる
