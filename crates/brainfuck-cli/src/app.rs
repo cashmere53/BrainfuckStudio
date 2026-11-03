@@ -8,11 +8,12 @@
 #![allow(dead_code)]
 
 use std::ffi::OsString;
+use std::io::Write;
 
 use brainfuck_core::{Machine, MachineConfig, MachineSnapshot, Program, RuntimeError, StopReason};
 
 use crate::args::{parse_args, Command, RunOptions, USAGE};
-use crate::error::{CliError, EXIT_SUCCESS};
+use crate::error::{CliError, IoTarget, EXIT_SUCCESS};
 use crate::input::acquire_input;
 use crate::source::{parse_source, read_source_file};
 
@@ -89,7 +90,7 @@ where
             EXIT_SUCCESS
         }
         Ok(Command::Run(options)) => match execute(&options, streams) {
-            Ok(report) => finish_run(&report),
+            Ok(report) => emit_results(&options, &report, streams),
             Err(error) => report_failure(&error, streams),
         },
         Err(error) => report_failure(&CliError::Args(error), streams),
@@ -104,18 +105,56 @@ fn execute(options: &RunOptions, streams: &mut Streams<'_>) -> Result<RunReport,
     Ok(run_program(program, input, options.max_steps))
 }
 
+/// 診断を 1 行で標準エラーへ書く。書き込み失敗は無視する(パニックしない)。
+fn report_diagnostic(error: &CliError, stderr: &mut dyn Write) {
+    let _ = stderr.write_all(format!("{error}\n").as_bytes());
+    let _ = stderr.flush();
+}
+
 /// 実行に至らない失敗の診断を標準エラーへ書き、終了コードを返す。書き込み失敗は無視する。
 fn report_failure(error: &CliError, streams: &mut Streams<'_>) -> u8 {
-    let _ = writeln!(streams.stderr, "{error}");
+    report_diagnostic(error, streams.stderr);
     error.exit_code()
 }
 
-/// 実行結果の出力段への受け渡し点。4.3 で出力・診断・状態表示の実装に置き換える。
-/// 現段階では標準出力へ書かず、判定から終了コードのみを返す。
-fn finish_run(report: &RunReport) -> u8 {
-    match &report.result {
-        Ok(()) => EXIT_SUCCESS,
-        Err(error) => error.exit_code(),
+/// 出力バイト列を無加工で標準出力へ書き、フラッシュする。0 バイトなら何も書かない。
+fn write_output(output: &[u8], stdout: &mut dyn Write) -> Result<(), CliError> {
+    if output.is_empty() {
+        return Ok(());
+    }
+    stdout
+        .write_all(output)
+        .and_then(|()| stdout.flush())
+        .map_err(|source| CliError::Io {
+            target: IoTarget::StandardOutput,
+            source,
+        })
+}
+
+/// 実行結果を標準ストリームへ書き、終了コードを決める出力段。ファイルには依存しない。
+///
+/// 順序は固定: 出力(部分出力を含む)→ 標準出力の書き込み失敗の診断 → 実行エラーの診断
+/// → 状態表示(`--dump-state` 時、標準出力の結果によらず)。終了コードは、標準出力の
+/// 書き込み失敗があれば 4、なければ実行エラー・未完了停止の分類、どちらもなければ 0。
+/// 標準エラーへの書き込み失敗は無視する。
+fn emit_results(options: &RunOptions, report: &RunReport, streams: &mut Streams<'_>) -> u8 {
+    let write_failure = write_output(&report.output, streams.stdout).err();
+    if let Some(error) = &write_failure {
+        report_diagnostic(error, streams.stderr);
+    }
+    if let Err(error) = &report.result {
+        report_diagnostic(error, streams.stderr);
+    }
+    if options.dump_state {
+        let _ = streams
+            .stderr
+            .write_all(format_state(&report.snapshot).as_bytes());
+        let _ = streams.stderr.flush();
+    }
+    match (write_failure, &report.result) {
+        (Some(error), _) => error.exit_code(),
+        (None, Ok(())) => EXIT_SUCCESS,
+        (None, Err(error)) => error.exit_code(),
     }
 }
 
@@ -312,6 +351,238 @@ mod tests {
             assert!(text.contains("failed to read program file"));
             assert!(!text.contains("missing-program-4-2"));
             assert!(!text.contains("no-such-dir-4-2"));
+        }
+    }
+
+    mod emit {
+        use super::super::*;
+        use crate::source::parse_source;
+        use std::cell::RefCell;
+        use std::io;
+        use std::path::PathBuf;
+
+        /// 書き込み先と呼び出し順を一つのログへ記録する。
+        struct Tagged<'a> {
+            tag: char,
+            log: &'a RefCell<String>,
+        }
+
+        impl io::Write for Tagged<'_> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                let text = String::from_utf8_lossy(buf);
+                self.log
+                    .borrow_mut()
+                    .push_str(&format!("{}:{text}|", self.tag));
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.log
+                    .borrow_mut()
+                    .push_str(&format!("{}:flush|", self.tag));
+                Ok(())
+            }
+        }
+
+        /// 書き込みを呼ばれた回数だけ数える。
+        #[derive(Default)]
+        struct Counting {
+            calls: usize,
+        }
+
+        impl io::Write for Counting {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.calls += 1;
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.calls += 1;
+                Ok(())
+            }
+        }
+
+        /// 常に書き込みに失敗する(閉じたパイプ相当)。
+        struct Broken;
+
+        impl io::Write for Broken {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed pipe"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// 参照プログラム。出力は `Hello World!\n`、停止時 `pc=106 dp=6`、実行済み命令数 906。
+        const HELLO: &[u8] = b"++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
+
+        fn options(dump_state: bool) -> RunOptions {
+            RunOptions {
+                program: PathBuf::from("prog.bf"),
+                input: None,
+                max_steps: None,
+                dump_state,
+            }
+        }
+
+        fn report(source: &[u8], max_steps: Option<u64>) -> RunReport {
+            let program = parse_source(source).expect("test program must parse");
+            run_program(program, Vec::new(), max_steps)
+        }
+
+        fn emit(
+            report: &RunReport,
+            dump_state: bool,
+            stdout: &mut dyn io::Write,
+            stderr: &mut dyn io::Write,
+        ) -> u8 {
+            let mut stdin = io::empty();
+            let mut streams = Streams {
+                stdin: &mut stdin,
+                stdout,
+                stderr,
+            };
+            emit_results(&options(dump_state), report, &mut streams)
+        }
+
+        /// 成功時は出力だけを書き、`--dump-state` なしなら標準エラーは空で 0 を返す。
+        #[test]
+        fn success_writes_output_and_leaves_stderr_empty() {
+            let log = RefCell::new(String::new());
+            let mut stdout = Tagged {
+                tag: 'O',
+                log: &log,
+            };
+            let mut stderr = Vec::new();
+            let code = emit(&report(HELLO, None), false, &mut stdout, &mut stderr);
+            assert_eq!(code, 0);
+            assert!(stderr.is_empty());
+            assert_eq!(*log.borrow(), "O:Hello World!\n|O:flush|");
+        }
+
+        /// `--dump-state` 指定時は、停止時のスナップショットを標準エラーへ書く。
+        #[test]
+        fn dump_state_writes_snapshot_to_stderr_on_success() {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let code = emit(&report(HELLO, None), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 0);
+            assert_eq!(stdout, b"Hello World!\n");
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                "state: pc=106 dp=6 steps=906\n"
+            );
+        }
+
+        /// 0 バイト出力では標準出力へ一切書かず、フラッシュもしない。
+        #[test]
+        fn empty_output_never_touches_stdout() {
+            let mut stdout = Counting::default();
+            let mut stderr = Vec::new();
+            let code = emit(&report(b"+++", None), false, &mut stdout, &mut stderr);
+            assert_eq!(code, 0);
+            assert_eq!(stdout.calls, 0);
+            assert!(stderr.is_empty());
+        }
+
+        /// 実行エラーでは部分出力を先に書き、その後に診断を書く。終了コードは 3。
+        #[test]
+        fn runtime_error_writes_partial_output_before_diagnostic() {
+            let log = RefCell::new(String::new());
+            let mut stdout = Tagged {
+                tag: 'O',
+                log: &log,
+            };
+            let mut stderr = Tagged {
+                tag: 'E',
+                log: &log,
+            };
+            let code = emit(&report(b"+.<", None), false, &mut stdout, &mut stderr);
+            assert_eq!(code, 3);
+            let text = log.borrow().clone();
+            assert!(
+                text.starts_with("O:\u{1}|O:flush|E:error: runtime error: data pointer out of bounds: pc=2, dp=0, direction=left\n|"),
+                "{text}"
+            );
+        }
+
+        /// 実行エラーの後も `--dump-state` の状態表示は診断の次に書かれる。
+        #[test]
+        fn runtime_error_with_dump_state_prints_diagnostic_then_state() {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let code = emit(&report(b"+.<", None), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 3);
+            assert_eq!(stdout, [1u8]);
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                "error: runtime error: data pointer out of bounds: pc=2, dp=0, direction=left\nstate: pc=2 dp=0 steps=2\n"
+            );
+        }
+
+        /// 上限超過でも、停止時点のスナップショットを状態表示に使う。
+        #[test]
+        fn step_limit_exceeded_dump_state_shows_partial_progress() {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let code = emit(&report(b"+++", Some(2)), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 3);
+            assert!(stdout.is_empty());
+            let text = String::from_utf8(stderr).unwrap();
+            assert!(text.ends_with("state: pc=2 dp=0 steps=2\n"), "{text}");
+            assert!(text.contains("limit=2"), "{text}");
+        }
+
+        /// 標準出力の書き込み失敗は 4。実行エラーがなければ I/O 診断と状態表示を書く。
+        #[test]
+        fn stdout_write_failure_without_runtime_error_is_exit_four() {
+            let mut stdout = Broken;
+            let mut stderr = Vec::new();
+            let code = emit(&report(HELLO, None), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 4);
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                "error: I/O error: failed to write standard output: closed pipe\nstate: pc=106 dp=6 steps=906\n"
+            );
+        }
+
+        /// 実行エラーの後に標準出力の書き込みが失敗した場合は 4 とし、両方の診断と状態表示を書く。
+        #[test]
+        fn stdout_write_failure_after_runtime_error_reports_both_diagnostics() {
+            let mut stdout = Broken;
+            let mut stderr = Vec::new();
+            let code = emit(&report(b"+.<", None), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 4);
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                "error: I/O error: failed to write standard output: closed pipe\nerror: runtime error: data pointer out of bounds: pc=2, dp=0, direction=left\nstate: pc=2 dp=0 steps=2\n"
+            );
+        }
+
+        /// 標準エラーへの書き込み失敗は無視し、終了コードは決まったまま返る。
+        #[test]
+        fn stderr_write_failure_is_ignored() {
+            let mut stdout = Vec::new();
+            let mut stderr = Broken;
+            let code = emit(&report(b"+.<", None), true, &mut stdout, &mut stderr);
+            assert_eq!(code, 3);
+            assert_eq!(stdout, [1u8]);
+        }
+
+        /// 同じ入力からの再実行は、出力・標準エラー・終了コードが一致する。
+        #[test]
+        fn repeated_runs_are_deterministic() {
+            let mut first_out = Vec::new();
+            let mut first_err = Vec::new();
+            let first = emit(&report(HELLO, None), true, &mut first_out, &mut first_err);
+            let mut second_out = Vec::new();
+            let mut second_err = Vec::new();
+            let second = emit(&report(HELLO, None), true, &mut second_out, &mut second_err);
+            assert_eq!(first, second);
+            assert_eq!(first_out, second_out);
+            assert_eq!(first_err, second_err);
         }
     }
 }
