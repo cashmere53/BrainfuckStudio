@@ -1,6 +1,6 @@
 # Implementation Plan
 
-- [ ] 1. Cargo workspace と brainfuck-core crate の雛形を用意する
+- [x] 1. Cargo workspace と brainfuck-core crate の雛形を用意する
   - ワークスペースのルート定義を作り、`crates/` 配下の全 crate をメンバーとして取り込む。resolver、共通パッケージ情報(edition 2021)、共通 lint(`unsafe_code` を forbid)を workspace レベルで宣言する
   - `brainfuck-core` の crate 定義を作る。外部依存は一切追加せず、workspace の lint 設定を継承する
   - crate のエントリには `unsafe` を禁止する宣言を置き、`instruction` / `error` / `parser` / `machine` の 4 モジュールを公開モジュールとして宣言し、各モジュールは空のファイルで用意する
