@@ -3,9 +3,6 @@
 //! 取得元は `--input` のファイル、標準入力、または空のいずれか。バイト列は加工せず core へ渡す。
 //! 標準入力は「入力命令があり、かつ `--input` が無い」ときに限って読む。
 
-// 後続タスク(4.x)で実行経路に接続するまで未使用のため許可する。
-#![allow(dead_code)]
-
 use std::io::Read;
 
 use brainfuck_core::{Instruction, Program};

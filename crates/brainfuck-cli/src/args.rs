@@ -3,9 +3,6 @@
 //! ファイルシステムには触れない(存在確認は後段)。引数エラーは [`ArgsError`] の
 //! 静的な分類で返し、利用者の指定値は保持しない。
 
-// 後続タスク(4.x)で実行経路に接続するまで未使用のため許可する。
-#![allow(dead_code)]
-
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 

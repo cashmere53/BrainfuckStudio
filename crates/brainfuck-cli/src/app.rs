@@ -4,9 +4,6 @@
 //! `run` を 1 回だけ呼ぶ。実行意味論と上限判定は core に委ね、ここでは再実装しない。
 //! 出力・スナップショット・判定は [`RunReport`] に束ね、後続の出力段へ渡す。
 
-// 後続タスク(4.2 以降)で実行経路に接続するまで未使用のため許可する。
-#![allow(dead_code)]
-
 use std::ffi::OsString;
 use std::io::Write;
 
@@ -78,7 +75,8 @@ pub struct Streams<'a> {
 /// 全体の入口。引数の列を受け取り、終了コードを返す。
 ///
 /// `--help` は使用方法を標準エラーへ書いて 0。引数エラーは診断を標準エラーへ書いて 2。
-/// 実行に至る場合は [`execute`] で固定順序に進める。この段階では標準出力へ書かない。
+/// 実行に至る場合は [`execute`] で固定順序に進め、結果の書き出しと終了コードの決定は
+/// [`emit_results`] に委ねる。
 pub fn run_cli<I>(args: I, streams: &mut Streams<'_>) -> u8
 where
     I: IntoIterator<Item = OsString>,

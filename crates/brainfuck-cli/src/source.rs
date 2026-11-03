@@ -2,9 +2,6 @@
 //!
 //! バイト列は加工せず core の `Program::parse_bytes` へ渡す。UTF-8 検証・置換・BOM 除去は行わない。
 
-// 後続タスク(4.x)で実行経路に接続するまで未使用のため許可する。
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use brainfuck_core::Program;
