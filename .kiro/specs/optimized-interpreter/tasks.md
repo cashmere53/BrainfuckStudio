@@ -1,7 +1,7 @@
 # Implementation Plan
 
 - [ ] 1. 基盤: crate の雛形を用意する
-- [ ] 1.1 `brainfuck-optimized` crate の雛形と依存・lint 設定を用意する
+- [x] 1.1 `brainfuck-optimized` crate の雛形と依存・lint 設定を用意する
   - 前提として `brainfuck-core` の実装(その spec の全タスク)が完了し、workspace ルートで `cargo test --workspace` が成功していること。ルートの workspace 定義が `crates/` 配下を取り込む構成であることを確認し、取り込まれない場合のみメンバー定義を追記する(`brainfuck-core` 配下は一切変更しない)
   - 作業開始時点の `brainfuck-core` のコミットハッシュを、タスクの完了記録(コミットメッセージまたは PR 説明)に書き残す(最終検証 6.2 で `git diff --stat <そのコミット> -- crates/brainfuck-core` が空であることの基準にする)
   - 新 crate の定義を作る。依存は `brainfuck-core`(path)のみで、外部 crate を一切追加しない。workspace の lint 設定(`unsafe_code` を forbid)を継承する
