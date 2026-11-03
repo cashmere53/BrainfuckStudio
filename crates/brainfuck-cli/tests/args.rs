@@ -412,3 +412,59 @@ fn argument_diagnostics_do_not_echo_supplied_values() {
         );
     }
 }
+
+// --- 1.3・1.7・1.10・6.8: 非 UTF-8 の `--name=value` も位置引数にせず、オプションとして扱う ---
+
+/// `prefix` の後ろに UTF-8 にできない 1 単位を付けた引数(Windows では不正サロゲート、Unix では不正バイト)。
+#[cfg(any(unix, windows))]
+fn non_utf8_after(prefix: &str) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let mut bytes = prefix.as_bytes().to_vec();
+        bytes.push(0xFF);
+        OsString::from_vec(bytes)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let mut units: Vec<u16> = prefix.encode_utf16().collect();
+        units.push(0xD800);
+        OsString::from_wide(&units)
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn non_utf8_max_steps_equals_value_is_usage_error_not_program_path() {
+    // 読みに行けば終了コード 4 になるプログラムパスを併記し、引数エラーで止まることを確かめる。
+    let args = [
+        non_utf8_after("--max-steps="),
+        OsString::from(MISSING_PROGRAM),
+    ];
+    let output = run_cli(&args, StdinMode::Null);
+    assert_usage_error(&output, "invalid value for --max-steps");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn non_utf8_unknown_equals_option_is_usage_error_not_program_path() {
+    let args = [non_utf8_after("--frob="), OsString::from(MISSING_PROGRAM)];
+    let output = run_cli(&args, StdinMode::Null);
+    assert_usage_error(&output, "unknown option");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn non_utf8_input_equals_value_is_accepted_as_path() {
+    // 非 UTF-8 のパスは値として受理され、存在しないためファイルの読込で I/O エラー(4)になる。
+    let args = [non_utf8_after("--input=no-such-dir-6-1/"), hello()];
+    let output = run_cli(&args, StdinMode::Null);
+    assert_eq!(output.code, Some(4), "stderr: {}", stderr_text(&output));
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr_text(&output).contains("input file"),
+        "{}",
+        stderr_text(&output)
+    );
+}

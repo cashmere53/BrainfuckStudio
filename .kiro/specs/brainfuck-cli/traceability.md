@@ -14,9 +14,9 @@
 | 1.2 5 個のオプションを受理 | `src/args.rs::all_options_with_separate_values`、`src/args.rs::default_max_steps_is_ten_million` | 対応 |
 | 1.3 `--opt value` と `--opt=value` を同義に扱う | `src/args.rs::equals_form_is_same_as_separate_form`、`tests/args.rs::equals_form_and_separate_form_mean_the_same_for_input`、`tests/limits.rs::max_steps_equals_form_is_accepted` | 対応 |
 | 1.4 オプションをパスの前後どちらに置いても同義 | `src/args.rs::options_may_precede_or_follow_program`、`tests/args.rs::input_option_before_or_after_program_path_means_the_same`、`tests/args.rs::max_steps_before_or_after_program_path_means_the_same` | 対応 |
-| 1.5 パス欠落は 2、標準出力空、案内を表示 | `src/args.rs::missing_program_is_error`、`src/app.rs::missing_program_is_usage_error_with_empty_stdout`、`tests/args.rs::missing_program_path_is_usage_error`、`tests/args.rs::only_flags_without_program_path_is_usage_error`、`tests/skeleton.rs::binary_without_arguments_is_usage_error_with_empty_stdout` | 対応 |
+| 1.5 パス欠落は 2、標準出力空、案内を表示 | `src/args.rs::missing_program_is_error`、`src/app.rs::missing_program_is_usage_error_with_empty_stdout`、`tests/args.rs::missing_program_path_is_usage_error`、`tests/args.rs::only_flags_without_program_path_is_usage_error` | 対応 |
 | 1.6 パスが 2 個以上は 2 | `src/args.rs::extra_program_is_error`、`tests/args.rs::two_program_paths_are_usage_error` | 対応 |
-| 1.7 未知オプションは 2 | `src/args.rs::unknown_option_is_error`、`tests/args.rs::unknown_option_is_usage_error`、`src/app.rs::unknown_option_diagnostic_does_not_echo_the_value` | 対応 |
+| 1.7 未知オプションは 2 | `src/args.rs::unknown_option_is_error`、`tests/args.rs::unknown_option_is_usage_error`、`src/app.rs::unknown_option_diagnostic_does_not_echo_the_value`、`src/args.rs::non_utf8_dash_token_is_unknown_option`、`tests/args.rs::non_utf8_unknown_equals_option_is_usage_error_not_program_path` | 対応 |
 | 1.8 値の欠落は 2 | `src/args.rs::missing_value_is_error`、`src/args.rs::empty_input_path_is_missing_value`、`tests/args.rs::input_option_without_value_is_usage_error`、`tests/args.rs::input_option_with_empty_inline_value_is_usage_error`、`tests/args.rs::max_steps_option_without_value_is_usage_error` | 対応 |
 | 1.9 `--input` / `--max-steps` の重複は 2 | `src/args.rs::duplicate_value_option_is_error`、`tests/args.rs::duplicate_input_option_is_usage_error`、`tests/args.rs::duplicate_max_steps_option_is_usage_error` | 対応 |
 | 1.10 引数検証失敗時はファイル読込・実行をしない | `tests/args.rs::argument_errors_do_not_read_program_input_or_stdin`、`src/args.rs::parsing_never_touches_the_filesystem_and_is_deterministic`、`tests/limits.rs::dump_state_is_not_printed_on_argument_error` | 対応 |
@@ -79,7 +79,7 @@
 | 6.5 `--no-step-limit` で上限なし | `tests/limits.rs::no_step_limit_lets_finite_program_finish_normally`、`src/app.rs::unlimited_run_exceeds_default_limit_and_completes_with_exact_steps`(既定上限 10,000,000 を超える 33,554,432 命令を上限なしで完走し、実行数・pc・dp を検証。差し戻し前の `unlimited_run_completes_past_default_style_limits` は 3 命令だけで上限超えを検証しておらず、本行の根拠として不十分だった) | 対応 |
 | 6.6 上限到達で追加実行せず、上限値と `pc` を含む診断、終了コード 3 | `src/error.rs::step_limit_diagnostic_embeds_limit_and_pc`、`src/app.rs::run_limit_two_exceeds_limit_with_runtime_error`、`tests/limits.rs::max_steps_below_program_length_stops_with_exit_3_and_diagnostic`、`tests/limits.rs::dump_state_on_step_limit_prints_interrupted_values` | 対応 |
 | 6.7 `--max-steps` と `--no-step-limit` の併用は 2 | `src/args.rs::max_steps_and_no_step_limit_conflict`、`tests/args.rs::max_steps_and_no_step_limit_together_is_usage_error`、`tests/limits.rs::max_steps_with_no_step_limit_is_usage_error_in_either_order` | 対応 |
-| 6.8 `--max-steps` の値が不正なら 2、値を表示しない | `src/args.rs::invalid_max_steps_values`、`tests/limits.rs::invalid_max_steps_values_are_usage_errors_without_echoing_the_value`、`tests/exit_codes.rs::invalid_max_steps_exits_2_without_echoing_value_or_cwd` | 対応 |
+| 6.8 `--max-steps` の値が不正なら 2、値を表示しない | `src/args.rs::invalid_max_steps_values`、`src/args.rs::non_utf8_max_steps_equals_value_is_invalid_value_not_program`、`tests/args.rs::non_utf8_max_steps_equals_value_is_usage_error_not_program_path`、`tests/limits.rs::invalid_max_steps_values_are_usage_errors_without_echoing_the_value`、`tests/exit_codes.rs::invalid_max_steps_exits_2_without_echoing_value_or_cwd` | 対応 |
 
 ## 要件 7: 実行状態の表示(`--dump-state`)
 
@@ -115,7 +115,7 @@
 | 9.3 入出力エラーの診断に対象の種別と OS の原因 | `src/error.rs::io_diagnostics_name_target_role_and_os_cause`、`src/error.rs::io_error_keeps_os_error_as_is`、`tests/exit_codes.rs::closed_stdout_exits_4_and_diagnostic_targets_standard_output` | 対応 |
 | 9.4 診断にパス文字列・絶対パス・親ディレクトリ名・カレントディレクトリを含めない | `tests/exit_codes.rs::missing_source_absolute_path_exits_4_without_leaking_path_or_cwd`、`tests/exit_codes.rs::missing_input_absolute_path_exits_4_without_leaking_path`、`tests/exit_codes.rs::invalid_max_steps_exits_2_without_echoing_value_or_cwd`、`tests/source.rs::missing_source_file_exits_four_and_names_program_file_without_path`、`src/source.rs::read_missing_source_file_is_program_file_io_error_without_path` | 対応 |
 | 9.5 診断にソース全文・抜粋・入力・出力バイト列を含めない | `tests/exit_codes.rs::diagnostics_exclude_source_text_and_io_bytes` | 対応 |
-| 9.6 引数不正の診断に指定値を含めず、種類を示す | `src/args.rs::errors_never_contain_supplied_values`、`src/error.rs::args_diagnostics_never_contain_supplied_values`、`tests/args.rs::argument_diagnostics_do_not_echo_supplied_values`、`src/app.rs::unknown_option_diagnostic_does_not_echo_the_value` | 対応 |
+| 9.6 引数不正の診断に指定値を含めず、種類を示す | `src/args.rs::errors_never_contain_supplied_values`、`src/error.rs::args_diagnostics_never_contain_supplied_values`、`tests/args.rs::argument_diagnostics_do_not_echo_supplied_values`、`src/app.rs::unknown_option_diagnostic_does_not_echo_the_value`、`src/args.rs::non_utf8_dash_token_is_unknown_option`、`tests/args.rs::non_utf8_unknown_equals_option_is_usage_error_not_program_path` | 対応 |
 | 9.7 診断文面を固定 | `src/error.rs::args_diagnostics_use_fixed_templates` | 対応 |
 
 ## 要件 10: サンプルプログラムと README

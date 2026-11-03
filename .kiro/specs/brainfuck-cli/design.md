@@ -279,7 +279,7 @@ impl std::error::Error for CliError {}
 | Requirements | 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 2.1, 2.3, 2.4, 6.1, 6.2, 6.5, 6.7, 6.8 |
 
 **Responsibilities & Constraints**
-- トークンを先頭から順に走査する。`--input` / `--max-steps` は次のトークンを(内容によらず)値として消費する。`--name=value` 形式は最初の `=` で分割する。`--` で始まる(UTF-8 として解釈できる)既知でないトークンは `UnknownOption`、それ以外(`-` で始まらない、または UTF-8 でない)は位置引数(プログラムパス)
+- トークンを先頭から順に走査する。`--input` / `--max-steps` は次のトークンを(内容によらず)値として消費する。`--name=value` 形式は最初の `=` で分割する。`-` で始まる既知でないトークン(`-` 単独を除く。UTF-8 かどうかは問わない)は `UnknownOption`、それ以外(`-` で始まらない、または `-` 単独)は位置引数(プログラムパス)。`--name=value` の値と `--input` の値は UTF-8 でなくても変換せずに保持する
 - `--input` の値が空文字列の場合は `MissingValue("--input")`。`--max-steps` の値は ASCII 数字のみ・1 文字以上・`u64` に収まる場合に限り受理(`+`/`-` 符号、空白、16 進、`_` は `InvalidValue`)。`--max-steps 0` は有効
 - 最初の引数エラーを保持して走査を続け、`--help` を見つけたら `Command::Help` を返す。`--help` が無ければ保持した最初のエラーを返す
 - 値付きオプションの重複は `DuplicateOption`、`--no-step-limit` と `--max-steps` の併用は `ConflictingStepLimit`。値なしフラグの重複は冪等

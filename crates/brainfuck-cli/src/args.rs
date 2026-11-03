@@ -13,7 +13,7 @@ pub const DEFAULT_MAX_STEPS: u64 = 10_000_000;
 
 /// 使用方法の文面。`--help` のときに標準エラーへ書く。
 pub const USAGE: &str = "\
-Usage: brainfuck-cli <PROGRAM> [OPTIONS]
+Usage: brainfuck-cli [OPTIONS] <PROGRAM>
 
 Runs a Brainfuck program file and writes its output to standard output.
 
@@ -71,32 +71,72 @@ where
     let mut state = ParseState::default();
     let mut tokens = args.into_iter();
     while let Some(token) = tokens.next() {
-        match token.to_str() {
-            // `-` 単独はプログラムパスとして扱う(標準入力の慣習に合わせる)。
-            Some(text) if text.starts_with('-') && text != "-" => {
-                let (name, inline) = match text.split_once('=') {
-                    Some((name, value)) => (name, Some(OsString::from(value))),
-                    None => (text, None),
-                };
-                match name {
-                    "--input" => {
-                        let value = inline.or_else(|| tokens.next());
-                        state.take_input(value);
-                    }
-                    "--max-steps" => {
-                        let value = inline.or_else(|| tokens.next());
-                        state.take_max_steps(value);
-                    }
-                    "--no-step-limit" if inline.is_none() => state.take_no_step_limit(),
-                    "--dump-state" if inline.is_none() => state.dump_state = true,
-                    "--help" if inline.is_none() => state.help = true,
-                    _ => state.record(ArgsError::UnknownOption),
+        match split_option(&token) {
+            Some((name, inline)) => match name.as_str() {
+                "--input" => {
+                    let value = inline.or_else(|| tokens.next());
+                    state.take_input(value);
                 }
-            }
-            _ => state.take_positional(PathBuf::from(token)),
+                "--max-steps" => {
+                    let value = inline.or_else(|| tokens.next());
+                    state.take_max_steps(value);
+                }
+                "--no-step-limit" if inline.is_none() => state.take_no_step_limit(),
+                "--dump-state" if inline.is_none() => state.dump_state = true,
+                "--help" if inline.is_none() => state.help = true,
+                _ => state.record(ArgsError::UnknownOption),
+            },
+            None => state.take_positional(PathBuf::from(token)),
         }
     }
     state.finish()
+}
+
+/// 引数 1 つがオプションなら `(名前, 最初の '=' 以降の値)` を返す。位置引数なら `None`。
+///
+/// `-` で始まるトークンは UTF-8 かどうかに関わらずオプションとして扱う(`-` 単独を除く)。
+/// 名前は非 UTF-8 部分を置換文字にした文字列で比較する。既知の名前は ASCII のみなので、
+/// 非 UTF-8 のトークンが既知の名前に一致することはない。値は元のバイト列(または UTF-16 単位)のまま保持する。
+fn split_option(token: &OsStr) -> Option<(String, Option<OsString>)> {
+    let lossy = token.to_string_lossy();
+    if !lossy.starts_with('-') || lossy == "-" {
+        return None;
+    }
+    match lossy.split_once('=') {
+        Some((name, _)) => Some((name.to_owned(), Some(value_after_first_equals(token)))),
+        None => Some((lossy.into_owned(), None)),
+    }
+}
+
+/// 最初の `=` より後ろの値を、変換せずに `OsString` として取り出す。`=` が無ければ空。
+#[cfg(unix)]
+fn value_after_first_equals(token: &OsStr) -> OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let bytes = token.as_bytes();
+    let start = bytes
+        .iter()
+        .position(|&byte| byte == b'=')
+        .map_or(bytes.len(), |index| index + 1);
+    OsString::from_vec(bytes[start..].to_vec())
+}
+
+/// 最初の `=` より後ろの値を、変換せずに `OsString` として取り出す。`=` が無ければ空。
+#[cfg(windows)]
+fn value_after_first_equals(token: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let units: Vec<u16> = token.encode_wide().collect();
+    let start = units
+        .iter()
+        .position(|&unit| unit == u16::from(b'='))
+        .map_or(units.len(), |index| index + 1);
+    OsString::from_wide(&units[start..])
+}
+
+/// 最初の `=` より後ろの値を取り出す。元の OS 文字列を取り出せない platform では、非 UTF-8 部分が損失する。
+#[cfg(not(any(unix, windows)))]
+fn value_after_first_equals(token: &OsStr) -> OsString {
+    let lossy = token.to_string_lossy();
+    OsString::from(lossy.split_once('=').map_or("", |(_, value)| value))
 }
 
 /// 走査中の状態。最初の引数エラーのみを保持し、後続のエラーでは上書きしない。
@@ -539,5 +579,83 @@ mod tests {
                 dump_state: false,
             }))
         );
+    }
+
+    /// `prefix` の後ろに UTF-8 にできない 1 単位を付けた引数(Windows では不正サロゲート、Unix では不正バイト)。
+    #[cfg(any(unix, windows))]
+    fn non_utf8_after(prefix: &str) -> OsString {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let mut bytes = prefix.as_bytes().to_vec();
+            bytes.push(0xFF);
+            OsString::from_vec(bytes)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            let mut units: Vec<u16> = prefix.encode_utf16().collect();
+            units.push(0xD800);
+            OsString::from_wide(&units)
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn non_utf8_max_steps_equals_value_is_invalid_value_not_program() {
+        // 非 UTF-8 の `--max-steps=...` はオプションとして扱い、値が不正なので InvalidValue になる。
+        assert_eq!(
+            parse_args(vec![non_utf8_after("--max-steps="), OsString::from("a.bf")]),
+            Err(ArgsError::InvalidValue("--max-steps"))
+        );
+        assert_eq!(
+            parse_args(vec![OsString::from("a.bf"), non_utf8_after("--max-steps=")]),
+            Err(ArgsError::InvalidValue("--max-steps"))
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn non_utf8_value_of_value_option_is_consumed() {
+        assert_eq!(
+            parse_args(vec![
+                OsString::from("--max-steps"),
+                non_utf8_after(""),
+                OsString::from("a.bf"),
+            ]),
+            Err(ArgsError::InvalidValue("--max-steps"))
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn non_utf8_input_equals_value_is_kept_as_path() {
+        assert_eq!(
+            parse_args(vec![non_utf8_after("--input=in"), OsString::from("a.bf")]),
+            Ok(Command::Run(RunOptions {
+                program: PathBuf::from("a.bf"),
+                input: Some(PathBuf::from(non_utf8_after("in"))),
+                max_steps: Some(DEFAULT_MAX_STEPS),
+                dump_state: false,
+            }))
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn non_utf8_dash_token_is_unknown_option() {
+        // 1 文字ダッシュ(`-h` と同様)や `--` で始まる非 UTF-8 トークンは未知のオプション。
+        for token in [
+            non_utf8_after("--"),
+            non_utf8_after("-"),
+            non_utf8_after("--dump-state="),
+            non_utf8_after("--no-step-limit="),
+            non_utf8_after("--frob="),
+        ] {
+            assert_eq!(
+                parse_args(vec![token, OsString::from("a.bf")]),
+                Err(ArgsError::UnknownOption)
+            );
+        }
     }
 }
