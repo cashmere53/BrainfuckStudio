@@ -123,7 +123,7 @@ crates/
         ├── regression.rs                   # tests/regression/*.bf を実行する回帰テスト
         ├── fixtures/
         │   ├── echo.bf                     # ,[.,]
-        │   └── input.bin                   # 0x00 / 0xFF / 0x0A を含む入力バイト列(バイナリ)
+        │   └── input.bin                   # 0xFF 0x0A 0x41 0x00 0xFF 0x0A(バイナリ。echo は最初の 0x00 で停止)
         └── regression/
             └── empty_program.bf            # 空ファイル(初期の回帰ケース)
 examples/
@@ -279,7 +279,7 @@ impl std::error::Error for CliError {}
 | Requirements | 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 2.1, 2.3, 2.4, 6.1, 6.2, 6.5, 6.7, 6.8 |
 
 **Responsibilities & Constraints**
-- トークンを先頭から順に走査する。`--input` / `--max-steps` は次のトークンを(内容によらず)値として消費する。`--name=value` 形式は最初の `=` で分割する。`--` で始まる(UTF-8 として解釈できる)既知でないトークンは `UnknownOption`、それ以外(`-` で始まらない、または UTF-8 でない)は位置引数(プログラムパス)
+- トークンを先頭から順に走査する。`--input` / `--max-steps` は次のトークンを(内容によらず)値として消費する。`--name=value` 形式は最初の `=` で分割する。`-` で始まる既知でないトークン(`-` 単独を除く。UTF-8 かどうかは問わない)は `UnknownOption`、それ以外(`-` で始まらない、または `-` 単独)は位置引数(プログラムパス)。`--name=value` の値と `--input` の値は UTF-8 でなくても変換せずに保持する
 - `--input` の値が空文字列の場合は `MissingValue("--input")`。`--max-steps` の値は ASCII 数字のみ・1 文字以上・`u64` に収まる場合に限り受理(`+`/`-` 符号、空白、16 進、`_` は `InvalidValue`)。`--max-steps 0` は有効
 - 最初の引数エラーを保持して走査を続け、`--help` を見つけたら `Command::Help` を返す。`--help` が無ければ保持した最初のエラーを返す
 - 値付きオプションの重複は `DuplicateOption`、`--no-step-limit` と `--max-steps` の併用は `ConflictingStepLimit`。値なしフラグの重複は冪等
@@ -437,7 +437,7 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 
 ### Integration Tests(`crates/brainfuck-cli/tests/`、実バイナリを起動)
 - **examples.rs**(12.2, 10.1-10.3, 11.2): `examples/hello.bf` の標準出力が `Hello World!\n`・標準エラー空・終了 0。`--dump-state` で `state: pc=106 dp=6 steps=906`。標準入力が `OpenUnused` でも終了する。README に 2 つの検証コマンドが含まれる(`include_str!("../../../README.md")`)。同一ソース・入力を core で直接実行した出力・実行数・エラー種別と CLI の結果が一致する(core を直接利用)
-- **input.rs**(12.3, 12.6, 4.x): `fixtures/echo.bf` に 0x00 / 0xFF / 0x0A を含む入力を標準入力と `--input fixtures/input.bin` の両方から与えると同一バイト列が出る。入力が尽きた後の `,` が 0。空入力。入力命令なしのプログラム、および `--input` 指定では `OpenUnused` の標準入力でも終了。入力ファイル不在は命令の有無によらず 4
+- **input.rs**(12.3, 12.6, 4.x): `fixtures/echo.bf`(`,[.,]`)は入力中の 0x00 または EOF で停止するため、0xFF 0x0A 0x41 0x00 0xFF 0x0A を標準入力と `--input fixtures/input.bin` の両方から与えると最初の 0x00 の手前(0xFF 0x0A 0x41)が同一に出る。全バイト値(0x00〜0xFF)の無変換は、`,[.,]` が 0x00 で停止するため `,.` を 256 個並べたプログラムを標準入力と `--input` の両方から与えて検証する(12.3)。`,.` に 0x00 を 1 バイト与える検証も残す。入力が尽きた後の `,` が 0。空入力。入力命令なしのプログラム、および `--input` 指定では `OpenUnused` の標準入力でも終了。入力ファイル不在は命令の有無によらず 4
 - **streams.rs**(12.5, 5.x): 全 256 バイト値(`.+` を 256 回)と `\r\n` が無加工で標準出力へ出る。成功時の標準エラー空。失敗時の標準出力空(括弧/引数/読込エラー)。実行エラー時は部分出力が標準出力にあり診断が標準エラーのみにある。空出力は 0 バイト
 - **limits.rs**(6.x, 7.x): `+[]` が既定で 10,000,000 命令後に終了 3 になり診断に `limit=10000000`、`--dump-state` に `steps=10000000`。`+++` に対し `--max-steps 3` は 0、`2` と `0` は 3、空プログラムは `--max-steps 0` でも 0。`--max-steps=3` 形式。`--max-steps` と `--no-step-limit` 併用は 2。値の不正(空、`-1`、`+3`、`abc`、`18446744073709551616`)は 2。`--dump-state` の表示条件(成功/実行エラー/解析エラーでは出ない)
 - **exit_codes.rs**(12.4, 12.7, 8.x, 9.x): 0(hello)、2(括弧不一致・引数エラー)、3(`<` で範囲外 → 診断に `pc` / `dp` / `direction=left`)、4(ソース不在、ディレクトリを指定、標準出力クローズ)。存在しない絶対パスと不正値を指定した診断に、そのパス文字列・親ディレクトリ名・指定値が含まれない。段の優先順位(括弧エラー + 入力ファイル不在 → 2)
@@ -453,7 +453,7 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 - `app.rs`: `classify_stop` の予約停止理由、書き込み失敗 `Write` で 4(実行エラー併記)、`--dump-state` が書き込み失敗時にも出る
 
 ### Performance
-- 通常のテストで重い実行は既定上限テスト 1 件(10,000,000 命令。デバッグビルドでも数秒以内)のみ。`--no-step-limit` の無制限動作は引数解決の単体テスト(`max_steps == None`)で担保し、長時間実行テストは作らない
+- 通常のテストで重い実行は計 3 件のみ。既定上限(10,000,000 命令)への到達テストが `tests/limits.rs` の 2 件(`default_limit_*`)、無制限実行の単体テストが `src/app.rs` の 1 件(33,554,432 命令、既定上限を超えて完走することを確認)。実測はデバッグビルドで各テスト 1 秒未満、合計 1 秒強。`--no-step-limit` の引数解決は単体テスト(`max_steps == None`)で担保し、これ以上の長時間実行テストは作らない
 
 ## Security Considerations
 

@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "brainfuck-cli"
+version = "0.1.0"
+dependencies = [
+ "brainfuck-core",
+]
+
+[[package]]
 name = "brainfuck-core"
 version = "0.1.0"
