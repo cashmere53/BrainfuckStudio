@@ -6,3 +6,5 @@ mod ir;
 mod machine;
 pub mod replay;
 mod state;
+
+pub use ir::{Op, OpKind, OptimizedProgram, Term};
