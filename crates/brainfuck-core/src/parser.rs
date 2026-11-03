@@ -107,6 +107,19 @@ impl Program {
     /// 括弧命令の対応先の命令添字を返す。括弧以外または範囲外は `None`。
     ///
     /// 対応は対称である。`[` の対応先は `]` の添字、`]` の対応先は `[` の添字となる。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use brainfuck_core::Program;
+    ///
+    /// let program = Program::parse("+[-[]]").expect("valid");
+    /// assert_eq!(program.matching_bracket(1), Some(5)); // 外側の `[`
+    /// assert_eq!(program.matching_bracket(5), Some(1)); // 対応先の対応先は自分自身
+    /// assert_eq!(program.matching_bracket(3), Some(4)); // 内側の `[`
+    /// assert_eq!(program.matching_bracket(0), None);    // 括弧以外は該当なし
+    /// assert_eq!(program.matching_bracket(99), None);   // 範囲外は該当なし
+    /// ```
     pub fn matching_bracket(&self, instruction_index: usize) -> Option<usize> {
         match self.instructions.get(instruction_index)? {
             Instruction::LoopStart | Instruction::LoopEnd => {

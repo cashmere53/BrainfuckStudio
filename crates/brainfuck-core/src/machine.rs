@@ -47,15 +47,25 @@ pub enum StepResult {
 
 /// 完走実行(`Machine::run`)が返す停止理由。
 ///
-/// `Machine::run` が `Ok` で返す停止理由は常に `Halted` である。
+/// 「命令数の上限に達した」という出来事の通知は層ごとに 2 つの規約があり、形が異なる。
+/// 取り違えないよう次の対応表に従う。
+///
+/// | 層 | 上限の種類 | 通知の形 |
+/// |----|-----------|----------|
+/// | core `Machine::run` | `MachineConfig.max_steps`(総実行数の上限) | `Err(RuntimeError::StepLimitExceeded)` |
+/// | debugger-state のバッチ | バッチ幅(1 回の呼び出しの実行数) | `Ok(StopReason::StepLimitReached)` |
+///
+/// したがって、ステップ上限到達の完走実行は停止理由ではなくエラーで返す。
+/// `Machine::run` が `Ok` で返す停止理由は常に `Halted`(正常終了)である。
 /// `StepLimitReached`・`Breakpoint`・`Cancelled` は将来の拡張用に予約しており、
 /// 現在の `Machine::run` は返さない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StopReason {
-    /// プログラムが終了状態に到達した(正常終了)。
+    /// プログラムが終了状態に到達した(正常終了)。`Machine::run` が返す唯一の停止理由。
     Halted,
-    /// 命令数の上限に到達した。予約済みで、`Machine::run` は返さない。
+    /// バッチ幅などの上限に到達した。予約済みで、`Machine::run` は返さない。
+    /// 総実行数の上限到達は `Err(RuntimeError::StepLimitExceeded)` で表す。
     StepLimitReached,
     /// ブレークポイントで停止した。予約済みで、`Machine::run` は返さない。
     Breakpoint,
@@ -209,11 +219,29 @@ impl Machine {
     /// 停止するまで命令を繰り返し実行する。
     ///
     /// 停止すると `Ok(StopReason::Halted)` を返す。実行エラーが発生すると、そのエラーを
-    /// 即座に返し、その時点までの状態を保持する。停止済みの機械では状態を変えず
-    /// `Ok(StopReason::Halted)` を返す。
+    /// 即座に返し、その時点までの出力・テープ・`pc`・`dp`・実行数を保持する。
+    /// 停止済みの機械では状態を変えず `Ok(StopReason::Halted)` を返す。
+    ///
+    /// 実行設定の命令数の上限に到達して未停止のまま終わる場合は、停止理由ではなく
+    /// `Err(RuntimeError::StepLimitExceeded)` を返す。`Ok` で返す停止理由は常に `Halted` である。
+    /// 上限の種類ごとの通知の形は [`StopReason`] の対応表を参照。
     ///
     /// 実行設定が命令数の上限を持たない場合、プログラムが終了しなければ戻らない可能性がある。
     /// 無限ループを含むプログラムに対しては、呼び出し側が上限を設定する責務を負う。
+    ///
+    /// # Examples
+    ///
+    /// 上限 3 のとき、無限ループは実行数が 3 に達した時点でステップ制限超過により中断する。
+    ///
+    /// ```
+    /// use brainfuck_core::{Machine, MachineConfig, Program, RuntimeError};
+    ///
+    /// let program = Program::parse("+[]").expect("valid");
+    /// let mut machine = Machine::new(program, Vec::new(), MachineConfig::with_max_steps(3));
+    /// let error = machine.run().unwrap_err();
+    /// assert!(matches!(error, RuntimeError::StepLimitExceeded { limit: 3, .. }));
+    /// assert_eq!(machine.snapshot().steps_executed, 3);
+    /// ```
     pub fn run(&mut self) -> Result<StopReason, RuntimeError> {
         // `step` の結果が `Executed` の間だけ繰り返す。実行エラーは `?` で即座に返し、
         // その時点の状態(出力・テープ・pc・dp・実行数)をそのまま保持する。
