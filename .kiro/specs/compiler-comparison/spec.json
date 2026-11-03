@@ -1,0 +1,22 @@
+{
+  "feature_name": "compiler-comparison",
+  "created_at": "2026-11-02T21:46:09Z",
+  "updated_at": "2026-11-03T12:00:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}
