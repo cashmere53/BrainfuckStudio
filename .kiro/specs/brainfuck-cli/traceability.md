@@ -124,7 +124,7 @@
 | --- | --- | --- |
 | 10.1 `examples/hello.bf` が `Hello World!\n` のみを出力するプログラムである | `tests/examples.rs::hello_example_prints_exactly_hello_world_with_empty_stderr` | 対応 |
 | 10.2 既定オプションで stdout のみ、stderr 空、終了コード 0 | `tests/examples.rs::hello_example_prints_exactly_hello_world_with_empty_stderr`、`tests/exit_codes.rs::hello_example_exits_0_with_program_output_only` | 対応 |
-| 10.3 標準入力が端末でも入力待ちせず終了する | `tests/examples.rs::hello_example_finishes_with_open_unused_stdin` | 部分(書き込みなしで開いたままのパイプで検証。実際の端末での確認は自動テストにない) |
+| 10.3 標準入力が端末でも入力待ちせず終了する | `tests/examples.rs::hello_example_finishes_with_open_unused_stdin` | 部分(自動テストは、書き込みなしで開いたままのパイプで検証。実際の Windows 端末では 2026-11-04 に手動確認済み: `hello.bf` は入力待ちにならず終了コード 0、対照の `,.` は入力待ちになる) |
 | 10.4 README に 2 つの検証コマンドを記載 | `tests/examples.rs::readme_contains_both_verification_commands` | 対応 |
 | 10.5 README に使用方法・全オプション・既定上限・終了コード・標準出力と標準エラーの役割 | `tests/examples.rs::readme_option_table_lists_every_option`、`tests/examples.rs::readme_exit_code_table_lists_0_2_3_and_4` | 部分(オプション表と終了コード表のみ自動検証。既定上限と出力の役割分担の記述は README 本文を目視で確認) |
 | 10.6 端末表示の文字コード注意とリダイレクトの推奨を記載 | 自動テストなし | 部分(README「出力の扱いに関する注意」節に記載があることを目視で確認。自動テストは無い) |
@@ -162,7 +162,7 @@
 | 3.7 | 部分 | 6.2 | 段を跨いだ順序(引数 → 読込 → 解析 → 入力 → 実行 → 出力)を一括で確かめる結合テストが無い。各段の順序は個別に検証済み |
 | 4.8 | 部分 | 3.3 | 標準入力の読取失敗の結合テストが無い(単体テストのみ) |
 | 8.6 | 部分 | 4.1 / 4.3 | 予約済みの未完了停止理由は単体テストのみ(core が現在返さないため到達不能) |
-| 10.3 | 部分 | 6.7 | 実端末での入力待ち回避は自動検証していない(開いたパイプで代替) |
+| 10.3 | 部分 | 6.7 | 実端末での入力待ち回避は自動検証していない(開いたパイプで代替)。Windows 端末では手動確認済み(2026-11-04)、Linux の疑似端末でも確認済み。自動テストは追加せず、手動確認で受容する |
 | 10.5 | 部分 | 5.2 | README の既定上限と出力役割分担の記述は自動検証していない(目視確認のみ) |
 | 10.6 | 部分 | 5.2 | README の端末文字コード注意は自動検証していない(目視確認のみ) |
 | 11.1 | 部分 | 4.1 | 実行意味論を独自実装していないことの自動テストは無い(静的確認のみ) |
