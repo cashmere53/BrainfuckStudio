@@ -8,3 +8,5 @@ pub mod error;
 pub mod instruction;
 pub mod machine;
 pub mod parser;
+
+pub use instruction::Instruction;
