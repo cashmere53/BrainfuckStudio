@@ -13,7 +13,7 @@ greenfield。Cargo workspace もコードも無い。仕様書 §4〜§6 に設�
 仕様書どおり `instruction` / `parser` / `machine` / `error` モジュールを持つ単一 crate として実装。パース時に jump_table を一度だけ構築し、実行中に括弧探索しない。Cargo workspace ルートも本 spec で用意する。
 
 ## Scope
-- **In**: workspace 雛形、`Instruction`(ソースバイトオフセット付き)、`Program::parse`/`jump_table`、`ParseError`(UnmatchedClosing/Opening)、`Machine`/`MachineConfig`/`StepResult`/`MachineSnapshot`/`tape()`/`output()`、`RuntimeError`(PointerOutOfBounds, StepLimitExceeded)、`run()` と `StopReason::Halted`/`StepLimitReached`、仕様書 §11 の単体・回帰テスト
+- **In**: workspace 雛形、`Instruction`(ソースバイトオフセット付き)、`Program::parse`/`parse_bytes`/`matching_bracket`(括弧対応表は解析時に構築し crate 内部に保持)、`ParseError`(UnmatchedClosing/Opening)、`Machine`/`MachineConfig`/`StepResult`/`MachineSnapshot`/`tape()`/`output()`、`RuntimeError`(PointerOutOfBounds, StepLimitExceeded)、`run()` と `StopReason::Halted`/`StepLimitReached`、仕様書 §11 の単体・回帰テスト
 - **Out**: CLI、ブレークポイント実行、キャンセル、バッチ実行、GUI、最適化
 
 ## Boundary Candidates

@@ -23,7 +23,7 @@
 ### This Spec Owns
 - `crates/brainfuck-cli` crate 一式(引数解析、入力取得、実行の呼び出し、出力・診断・状態表示、終了コード決定)
 - CLI の観測可能な契約: オプション名と意味、既定上限 10,000,000、標準出力はプログラム出力のみ、診断の文面テンプレート、`--dump-state` の書式、終了コード割り当てと複数失敗時の決定規則
-- ソースファイルのバイト列から core が受け取る `&str` への変換規則(0x80 以上のバイトをコメント扱いにし、バイトオフセットを保存する)
+- ソースファイルのバイト列を core の `Program::parse_bytes` へ渡す呼び出し(非 UTF-8 バイトは core がコメント扱いにし、バイトオフセットは実バイト位置になる。CLI は前処理を持たない)
 - `examples/hello.bf` とルート `README.md` の検証手順・使用方法の記述
 - CLI 結合テスト一式とそのフィクスチャ(`crates/brainfuck-cli/tests/`)
 
@@ -108,7 +108,7 @@ crates/
     │   ├── main.rs                         # #![forbid(unsafe_code)]、mod 宣言、標準ストリーム取得、ExitCode 返却のみ
     │   ├── error.rs                        # CliError / ArgsError / IoTarget、終了コード定数、exit_code、Display(診断テンプレート)
     │   ├── args.rs                         # RunOptions / Command、parse_args、USAGE、DEFAULT_MAX_STEPS
-    │   ├── source.rs                       # read_source_file、parse_source(0x80 以上をコメント化して Program::parse)
+    │   ├── source.rs                       # read_source_file、parse_source(Program::parse_bytes を呼び、括弧エラーを CliError へ包む)
     │   ├── input.rs                        # requires_stdin、acquire_input(--input ファイル / 標準入力 / 空)
     │   └── app.rs                          # Streams、run_cli、execute、run_program、classify_stop、format_state
     └── tests/
@@ -145,7 +145,7 @@ flowchart TD
     Parse -- 引数エラー --> E2a[診断と使用方法の案内 終了 2]
     Parse -- Run --> ReadSrc[ソースファイル読込]
     ReadSrc -- 失敗 --> E4a[診断 終了 4]
-    ReadSrc --> ParseSrc[0x80 以上をコメント化し Program::parse]
+    ReadSrc --> ParseSrc[Program::parse_bytes で解析]
     ParseSrc -- 括弧エラー --> E2b[診断 終了 2]
     ParseSrc --> NeedIn{--input あり または 入力命令あり}
     NeedIn -- いいえ --> Empty[入力は空]
@@ -177,7 +177,7 @@ flowchart TD
 | 1.1, 1.2, 1.3, 1.4, 1.11 | オプション集合、`--opt=value`、順序非依存、フラグの冪等 | ArgParser | `parse_args` | 実行パイプライン |
 | 1.5, 1.6, 1.7, 1.8, 1.9, 1.10 | 引数エラー(欠落/余剰/未知/値なし/重複)は終了 2、読込前に失敗 | ArgParser, CliError | `ArgsError`, `CliError::exit_code` | 実行パイプライン |
 | 2.1, 2.2, 2.3, 2.4 | `--help` は stderr、終了 0、優先、内容 | ArgParser, App | `Command::Help`, `USAGE` | 実行パイプライン |
-| 3.1, 3.2, 3.3, 3.4 | ソース読込、非 UTF-8 コメント化、オフセット保存、空プログラム | SourceLoader | `read_source_file`, `parse_source` | 実行パイプライン |
+| 3.1, 3.2, 3.3, 3.4 | ソース読込、非 UTF-8 バイトのコメント扱い、オフセット保存、空プログラム | SourceLoader | `read_source_file`, `parse_source` | 実行パイプライン |
 | 3.5, 3.6, 3.7 | 括弧エラー=2、読込失敗=4、段の順序 | SourceLoader, CliError, App | `CliError::{Parse, Io}` | 実行パイプライン |
 | 4.1, 4.2, 4.3, 4.4, 4.7, 4.8 | 入力ファイル/標準入力/読まない条件/失敗=4 | InputLoader | `acquire_input`, `requires_stdin` | 実行パイプライン |
 | 4.5, 4.6 | EOF=0 を core の結果として反映、空入力 | InputLoader, App(core 委譲) | `Machine::run` | - |
@@ -202,7 +202,7 @@ flowchart TD
 | Crate | Build | bin crate 定義、lint、core への path 依存 | 11.3, 11.4 | brainfuck-core (P0) | - |
 | CliError | Domain | エラー分類・終了コード・診断文の集約 | 3.5, 3.6, 8.1-8.8, 9.1-9.7 | brainfuck-core (P0) | Service |
 | ArgParser | Boundary | argv から `Command` を決定的に構築 | 1.1-1.11, 2.1-2.4, 6.1, 6.2, 6.5, 6.7, 6.8 | CliError (P0) | Service |
-| SourceLoader | Boundary | ソースファイルの読込とコメント化付き解析 | 3.1-3.6 | CliError (P0), core Program (P0) | Service |
+| SourceLoader | Boundary | ソースファイルの読込とバイト列解析 | 3.1-3.6 | CliError (P0), core Program (P0) | Service |
 | InputLoader | Boundary | 入力バイト列の取得(ファイル/stdin/空) | 4.1-4.8 | CliError (P0), core Program (P0) | Service |
 | App | Orchestration | 段の直列結合、実行、出力・診断・状態表示、終了コード決定 | 2.1, 3.7, 4.5, 4.6, 5.1-5.7, 6.3, 6.4, 6.6, 7.1-7.7, 8.1-8.8, 11.1, 11.2 | 全 Component (P0) | Service, State |
 | Example | Content | `examples/hello.bf` | 10.1, 10.2, 10.3 | なし | - |
@@ -313,13 +313,13 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 
 | Field | Detail |
 |-------|--------|
-| Intent | ソースファイルをバイト列で読み、core が受け取る `&str` へバイト位置を保って変換して解析する |
+| Intent | ソースファイルをバイト列で読み、core の `Program::parse_bytes` でそのまま解析する |
 | Requirements | 3.1, 3.2, 3.3, 3.4, 3.5, 3.6 |
 
 **Responsibilities & Constraints**
 - `read_source_file` は `std::fs::read` の失敗を `CliError::Io { ProgramFile, .. }` へ変換する(パスは保持しない)
-- `parse_source` はバイト列を 1 バイトずつ変換する: 0x80 未満はそのまま ASCII 文字、0x80 以上は ASCII 空白 1 個に置換する。8 命令は ASCII であり 0x80 以上のバイトは常にコメントなので命令列は変わらず、かつ置換後の文字列長・各バイト位置が元ファイルと一致するため、core が報告するソースバイトオフセットはファイル先頭からの実バイト位置になる(UTF-8 検証は行わない。BOM もコメントとして扱われる)
-- `Program::parse` の `ParseError` を `CliError::Parse` へ包む
+- `parse_source` はバイト列を加工せず `Program::parse_bytes` へ渡す。8 命令は ASCII であり 0x80 以上のバイトは core が常にコメントとして扱うため、命令列は変わらず、core が報告するソースバイトオフセットはファイル先頭からの実バイト位置になる(UTF-8 検証は行わない。BOM もコメントとして扱われる)。CLI 側に文字の置換・変換の前処理は持たない(core の要件 2.8)
+- `Program::parse_bytes` の `ParseError` を `CliError::Parse` へ包む
 
 ##### Service Interface
 ```rust
@@ -413,7 +413,7 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 | Requirements | 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9, 12.10, 11.2 |
 
 - `tests/common/mod.rs`: `run_cli(args, StdinMode) -> CliOutput { stdout, stderr, code }`。`StdinMode::{Null, Bytes(Vec<u8>), OpenUnused}`(`OpenUnused` は書き込まず閉じないパイプ=端末相当)。stdout/stderr は別スレッドで並行読み取り(デッドロック回避)、`try_wait` のポーリングで有限時間(30 秒)を超えたら `kill` して失敗(12.8)。`run_cli_closed_stdout` は子の標準出力の読み取り側を即座に閉じる(書き込み失敗=4 の再現)。`write_temp(name, bytes)` は `env!("CARGO_TARGET_TMPDIR")` 配下に一意名で作成する(外部 crate 不要)。`example_path("hello.bf")` / `fixture_path(..)` は `CARGO_MANIFEST_DIR` 基準
-- 単体テスト(`src/*.rs` の `#[cfg(test)]`): `parse_args` の表駆動、`CliError::exit_code` と `Display`(値の非エコー)、`parse_source` の置換とオフセット、`acquire_input` が読み取り不可の `Read` を触らない条件、`classify_stop` が `Cancelled` / `Breakpoint` / `StepLimitReached` を `Incomplete`(3)へ写すこと、書き込み失敗する `Write` による 4 と実行エラー併記、`format_state`
+- 単体テスト(`src/*.rs` の `#[cfg(test)]`): `parse_args` の表駆動、`CliError::exit_code` と `Display`(値の非エコー)、`parse_source` の非 UTF-8 バイトの扱いとオフセット、`acquire_input` が読み取り不可の `Read` を触らない条件、`classify_stop` が `Cancelled` / `Breakpoint` / `StepLimitReached` を `Incomplete`(3)へ写すこと、書き込み失敗する `Write` による 4 と実行エラー併記、`format_state`
 
 ## Data Models
 
@@ -448,7 +448,7 @@ where I: IntoIterator<Item = std::ffi::OsString>;
 ### Unit Tests(`src/` 内)
 - `args.rs`: 表駆動で全 `ArgsError` 経路、`--help` 優先、値として消費された `--help`、デフォルト/`None`/`Some(N)` の `max_steps` 解決(`--no-step-limit` が `None`、既定が `Some(10_000_000)`)
 - `error.rs`: 全 `CliError` の `exit_code`(2/3/4)、`Display` が指定値を含まない
-- `source.rs`: 0x80 以上の置換でオフセットが保存される、全 256 バイト値で失敗しない
+- `source.rs`: 非 UTF-8 バイトを含んでもオフセットが実バイト位置になる、全 256 バイト値で失敗しない
 - `input.rs`: `requires_stdin` の真偽、`acquire_input` の判定順(呼ばれたら失敗する `Read` を使用)
 - `app.rs`: `classify_stop` の予約停止理由、書き込み失敗 `Write` で 4(実行エラー併記)、`--dump-state` が書き込み失敗時にも出る
 

@@ -61,7 +61,14 @@
 - **Rationale**: 仕様書 §6「停止済みなら Halted、制限値に到達済みなら次の命令を実行せずエラー」の文順と、ちょうど上限で終了するプログラムが成功するという自然な境界の両立
 
 ### Decision: `#[non_exhaustive]` の適用範囲
-- `ParseError` / `RuntimeError` / `StopReason` / `MachineSnapshot` に付与(debugger-state が後方互換で拡張するため、要件 1.6)。`StepResult`(仕様書で 2 値固定)、`MachineConfig`(リテラル構築が利便)、`Instruction`(8 命令固定)には付与しない
+- `ParseError` / `RuntimeError` / `StopReason` / `MachineSnapshot` / `MachineConfig` に付与(debugger-state 等が後方互換で拡張するため、要件 1.6)。`StepResult`(仕様書で 2 値固定)、`Instruction`(8 命令固定)には付与しない
+- 設計レビューでの改訂: 当初 `MachineConfig` は「リテラル構築が利便」として除外していたが、フィールド追加が下流の破壊的変更になるため付与に変更した。構築は `unlimited()` / `with_max_steps(n)` に限定される(下流 spec はいずれもコンストラクタを使用済みで影響なし)
+
+### Decision: `Program::parse_bytes(&[u8])` を公開し、括弧対応表は crate 内部に閉じる(設計レビューでの追加)
+- **Context**: 走査は元々バイト単位だが公開 API が `&str` のみで、CLI が 0x80 以上を空白に置換する前処理を持つ必要があった。また `jump_table()` は括弧以外の要素が未規定のまま `&[usize]` を公開しており、誤読の余地があった
+- **Selected Approach**: 解析の実体を `parse_bytes` に置き `parse(&str)` は委譲。`jump_table()` の公開をやめ(`pub(crate)`)、外部は `matching_bracket` のみを使う
+- **Rationale**: 前処理の重複と誤りを排除し、契約から未規定の値を除く。`jump_table()` を使う下流 spec は存在しない(optimized-interpreter は `matching_bracket` を使用)
+- **Trade-offs**: 公開面が `parse_bytes` 分だけ増える。表全体を一括で取りたい用途が出たら、番兵値を仕様化して追加する
 - トレードオフ: 下流の `match` はワイルドカード腕が必要になる
 
 ### Synthesis 結果

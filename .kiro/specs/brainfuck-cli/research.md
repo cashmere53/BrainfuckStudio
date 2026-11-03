@@ -6,7 +6,7 @@
 - **Key Findings**:
   - core の `run()` はステップ上限を `Err(RuntimeError::StepLimitExceeded)` で返し、`StopReason::{StepLimitReached, Breakpoint, Cancelled}` は返さない。CLI は `#[non_exhaustive]` のためワイルドカードで防御し、`Halted` 以外は終了コード 3 とする
   - 仕様書の `examples/hello.bf` 検証コマンド(`cargo run -p brainfuck-cli -- examples/hello.bf`)は、`--input` 無しで常に標準入力を EOF まで読む実装だと端末で入力待ちになる。入力命令を含むプログラムのみ標準入力を読む方式で観測上の差なく解決できる
-  - Brainfuck 命令は ASCII のみのため、0x80 以上のバイトを ASCII 空白へ置換すれば、命令列を変えず、かつ core が報告するソースバイトオフセットをファイル上の実バイト位置と一致させたまま、非 UTF-8 ソース(例: Shift-JIS コメント)を扱える
+  - Brainfuck 命令は ASCII のみのため、core のバイト列解析(`Program::parse_bytes`)に生のバイト列を渡せば、命令列を変えず、かつ core が報告するソースバイトオフセットをファイル上の実バイト位置と一致させたまま、非 UTF-8 ソース(例: Shift-JIS コメント)を扱える(core 設計レビューで core 側に追加)
 
 ## Research Log
 
@@ -14,7 +14,7 @@
 - **Context**: CLI がどこまで core に依存し、何を自前で持つか
 - **Sources Consulted**: `.kiro/specs/brainfuck-core/design.md`、`requirements.md`
 - **Findings**:
-  - 使用する API は `Program::parse(&str)` / `Program::instructions()` / `Instruction` / `Machine::new(program, input, config)` / `Machine::run()` / `Machine::{output, snapshot}` / `MachineConfig::{unlimited, with_max_steps}`。いずれも core design で公開契約として定義済み
+  - 使用する API は `Program::parse_bytes(&[u8])` / `Program::instructions()` / `Instruction` / `Machine::new(program, input, config)` / `Machine::run()` / `Machine::{output, snapshot}` / `MachineConfig::{unlimited, with_max_steps}`。いずれも core design で公開契約として定義済み
   - `MachineSnapshot` は `#[non_exhaustive]` だが公開フィールド(`pc`, `data_pointer`, `steps_executed`)は外部から読める
   - `Machine` はエラー時も状態を保持するため、実行エラー後に `output()` と `snapshot()` を取得できる(部分出力と `--dump-state` に必要)
   - `ParseError` / `RuntimeError` の `Display` は数値と列挙値のみで機微情報を含まない(core 13.7)
@@ -33,12 +33,13 @@
 - **Implications**: 「`--input` なし かつ 入力命令あり」のときのみ標準入力を読む(要件 4.2〜4.4)。`--input` 指定は入力命令の有無によらず常にファイルを読み、不在は 4(利用者の明示指定を黙殺しない)。標準入力の読み取り失敗が報告されるのも入力命令ありの場合に限られる(許容)
 
 ### 非 UTF-8 ソースの扱い
-- **Context**: `Program::parse` は `&str` を受け取る。ソースファイルは任意バイト列であり得る(日本語の旧エンコーディングのコメント等)
+- **Context**: ソースファイルは任意バイト列であり得る(日本語の旧エンコーディングのコメント等)。当初の core の解析 API は `&str` のみだった
 - **Alternatives**:
   1. 非 UTF-8 を I/O エラー(4)で拒否 — コメントだけの理由で実行できず不親切
   2. `String::from_utf8_lossy` — U+FFFD が 3 バイトになりオフセットがずれる(診断が実バイト位置と一致しない)
-  3. 0x80 以上のバイトを ASCII 空白 1 個に置換 — 長さ・位置が保存される
-- **Selected**: 3。命令は ASCII のみで 0x80 以上は必ずコメントなので意味は不変
+  3. 0x80 以上のバイトを ASCII 空白 1 個に置換してから `parse(&str)` — 長さ・位置が保存されるが、呼び出し側ごとに前処理が必要(当初案)
+  4. core にバイト列解析 `Program::parse_bytes(&[u8])` を追加し、生のバイト列を渡す
+- **Selected**: 4(core 設計レビューで 3 から変更)。命令は ASCII のみで 0x80 以上は必ずコメントなので意味は不変。前処理が不要になり、位置は実バイト位置のまま
 - **Follow-up**: `desktop-gui` はソースを文字列(UTF-8)で扱うが、有効 UTF-8 では core が直接 `&str` を解析した結果と CLI の結果が同一になる(マルチバイト文字は元々コメント)
 
 ### 診断への機微情報の非混入
