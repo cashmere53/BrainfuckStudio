@@ -3,7 +3,7 @@
 > 前提: upstream の `brainfuck-core` spec の実装(ワークスペースのルート定義と、`Program` / `Instruction` / `Machine` / `MachineConfig` / `MachineSnapshot` / `StopReason` / `ParseError` / `RuntimeError` の公開 API)が完了していること。以降の `_Depends:_` に現れる番号なしの「core」はこの前提を指す。
 
 - [ ] 1. 基盤: CLI crate の雛形とサンプルプログラムを用意する
-- [ ] 1.1 CLI crate の雛形を作る
+- [x] 1.1 CLI crate の雛形を作る
   - `crates/brainfuck-cli` を bin crate として定義する。依存は `brainfuck-core` への path 依存のみで、外部 crate は本番・dev とも追加せず、workspace の lint 設定を継承する(ワークスペースのルート定義は core 側が作成済みで、`crates/*` により自動的にメンバーになる。ルートは変更しない)
   - エントリには `unsafe` 禁止の宣言を置き、`error` / `args` / `source` / `input` / `app` の 5 モジュールを宣言し、各モジュールは空のファイルで用意する。`main` は後続タスクで接続するまで、何もせず終了コード 0 を返す仮の本体とする
   - ワークスペースのルートで `cargo build --workspace` と `cargo run -p brainfuck-cli` が警告・エラーなく成功する
