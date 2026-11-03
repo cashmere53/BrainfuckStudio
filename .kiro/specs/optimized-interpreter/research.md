@@ -12,7 +12,7 @@
   - 素朴実装換算の実行数は、融合操作・最適化ループのいずれでも**事前に閉形式で厳密に計算可能**(下記「実行数の閉形式」)。したがって上限判定は「操作を実行する前に残り予算と比較する」だけで素朴実装と同じ境界を再現できる
   - 一括適用が意味を保てない稀なケース(範囲外・予算不足)は、**その操作の先頭から素朴意味論でそのまま再生する縮退経路**に切り替えれば、エラー時の状態・`pc` が素朴実装と構造的に一致する。縮退経路が走るのは必ずエラー(または予算切れ)の直前であり、性能には影響しない
   - core の `MachineSnapshot` は `#[non_exhaustive]` のため core 外から構築できない。最適化側は独自のスナップショット型を持つ
-  - core の `RuntimeError` / `StopReason` / `MachineConfig` は(enum 属性のみの `non_exhaustive` のため)外部 crate から値を構築・比較でき、型を再利用して「同一エラー型」(要件 13.1)を満たせる
+  - core の `RuntimeError` / `StopReason` は(enum の `non_exhaustive` のため)外部 crate から値を構築・比較でき、`MachineConfig` は構造体の `non_exhaustive` により明示コンストラクタ(`unlimited()` / `with_max_steps(n)`)で構築し、`max_steps` フィールドは読み取れる、型を再利用して「同一エラー型」(要件 13.1)を満たせる
 
 ## Research Log
 
