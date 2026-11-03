@@ -51,6 +51,58 @@
 //! use brainfuck_core::MachineConfig;
 //! let _ = MachineConfig { max_steps: None };
 //! ```
+//!
+//! # 非網羅的な型の契約
+//!
+//! `#[non_exhaustive]` の付いた型は、外部 crate から構造体リテラルで作れず、
+//! ワイルドカードなしの網羅的な `match` も書けない。将来の追加を破壊的変更にしないための規約である。
+//!
+//! ```compile_fail,E0639
+//! use brainfuck_core::MachineSnapshot;
+//! // 観測結果の構造体リテラルは非網羅的のため外部からは作れない。
+//! let _ = MachineSnapshot {
+//!     pc: 0,
+//!     data_pointer: 0,
+//!     current_cell: 0,
+//!     steps_executed: 0,
+//!     halted: true,
+//! };
+//! ```
+//!
+//! ```compile_fail,E0004
+//! use brainfuck_core::StopReason;
+//! // 予約バリアントを含め全て列挙しても、非網羅的な enum はワイルドカードを要求される。
+//! fn label(reason: StopReason) -> &'static str {
+//!     match reason {
+//!         StopReason::Halted => "halted",
+//!         StopReason::StepLimitReached => "step limit",
+//!         StopReason::Breakpoint => "breakpoint",
+//!         StopReason::Cancelled => "cancelled",
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail,E0004
+//! use brainfuck_core::ParseError;
+//! // 解析エラーの enum も非網羅的のため、ワイルドカードなしの match はできない。
+//! fn label(error: ParseError) -> &'static str {
+//!     match error {
+//!         ParseError::UnmatchedClosingBracket { .. } => "closing",
+//!         ParseError::UnmatchedOpeningBracket { .. } => "opening",
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail,E0004
+//! use brainfuck_core::RuntimeError;
+//! // 実行エラーの enum も非網羅的のため、ワイルドカードなしの match はできない。
+//! fn label(error: RuntimeError) -> &'static str {
+//!     match error {
+//!         RuntimeError::PointerOutOfBounds { .. } => "pointer",
+//!         RuntimeError::StepLimitExceeded { .. } => "limit",
+//!     }
+//! }
+//! ```
 
 #![forbid(unsafe_code)]
 

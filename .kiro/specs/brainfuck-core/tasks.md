@@ -115,7 +115,7 @@
 
 - [x] 5.2 (P) 結合テスト(Hello World とエコー)を追加する
   - `Hello World!\n` を出力する標準プログラムと、入力をそのまま出力に返すプログラム(`,[.,]`)を、テスト用フィクスチャのファイルとして用意する
-  - `tests/integration.rs` に、Hello World が出力 `Hello World!\n` で正常停止すること、エコーが 0x00 と 0xFF を含む任意のバイト列を同一バイト列として出力し、EOF の 0 でループを抜けて停止することのテストを置き、成功する
+  - `tests/integration.rs` に、Hello World が出力 `Hello World!\n` で正常停止すること、エコーが 0x01〜0xFF(0xFF を含む)のバイト列を同一バイト列として出力し、入力中の 0x00 または EOF(いずれもセルが 0)でループを抜けて停止することのテストを置き、成功する
   - _Depends: 5.1_
   - _Boundary: Test suite (integration)_
   - _Requirements: 14.6_
@@ -143,4 +143,4 @@
 
 ## Implementation Notes
 
-- 5.2: tasks.md 5.2 / design.md(テスト戦略)の「エコー `,[.,]` が 0x00 を含む任意バイト列を同一出力」は原理的に不可能(EOF=0 とセル上で区別できず、入力中の 0x00 でループを抜ける)。integration.rs は 0x01〜0xFF の同一出力・入力中 0x00 で終了・EOF 停止・空入力で代替。仕様側の文言修正案は「0x01〜0xFF(0xFF を含む)を同一出力し、0x00 または EOF で停止」。人間レビューで要判断(requirements 14.6 自体は 0x00 に言及しておらず影響なし)。
+- 5.2: tasks.md 5.2 / design.md(テスト戦略)の「エコー `,[.,]` が 0x00 を含む任意バイト列を同一出力」は原理的に不可能(EOF=0 とセル上で区別できず、入力中の 0x00 でループを抜ける)。integration.rs は 0x01〜0xFF の同一出力・入力中 0x00 で終了・EOF 停止・空入力で代替。仕様側の文言(tasks.md 5.2 / design.md テスト戦略)は「0x01〜0xFF(0xFF を含む)を同一出力し、0x00 または EOF で停止」に修正済み(requirements 14.6 自体は 0x00 に言及しておらず影響なし)。

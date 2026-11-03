@@ -39,7 +39,7 @@
 ### Allowed Dependencies
 - Rust 標準ライブラリ(`core` / `alloc` 相当の機能のみ。`std::fs` / `std::io` / `std::env` は使用しない)
 - 外部 crate への依存は **一切追加しない**(本番・dev とも)。エラー実装は `std::error::Error` と `fmt::Display` を手書きする
-- 依存方向(厳守): `error` ← `instruction` ← `parser` ← `machine` ← `lib`(re-export)。逆向きの import 禁止
+- 依存方向(厳守): `error` / `instruction`(互いに非依存の葉) ← `parser` ← `machine` ← `lib`(re-export)。逆向きの import 禁止
 
 ### Revalidation Triggers
 以下を変更する場合、下流 spec(cli / debugger-state / optimized-interpreter / compiler-comparison)は統合を再確認する。
@@ -399,7 +399,7 @@ impl Machine {
 | Intent | 仕様書 §11 を自動テストで検証し、後続 spec のオラクルの信頼性を担保する |
 | Requirements | 14.1-14.8 |
 
-- `tests/common/mod.rs`: `machine_from(source, input, config)`、`run_to_end(source, input) -> (Vec<u8> output, Machine)` 等の共有ヘルパ。tape の期待値比較用に `assert_untouched(&Machine, &Machine)`(clone と `==` 比較)を提供
+- `tests/common/mod.rs`: `machine_from(source, input, config) -> Machine` の共有ヘルパ。状態の完全一致比較用に `assert_same_state(actual: &Machine, expected: &Machine)`(snapshot / tape / output / input_position 等を比較)を提供
 - `tests/regression.rs`: `tests/regression/*.bf` を `include_str!` で読み、各ファイルに対応するテスト関数を持つ規約。初期ケースとして規約の実証用に `+[-]`(末尾 `]` で停止、8.8)を 1 件置く。不具合ごとに「最小 `.bf` + 対応テスト関数 + コメントで事象を記述」を追加(14.7)
 
 ## Data Models
@@ -430,7 +430,7 @@ impl Machine {
 - **loops.rs**(14.4): セル 0 の `[` スキップ(スキップ内命令が `steps` に加算されない)、反復回数と `steps` の正確な値、ネスト、ジャンプ先が対応括弧の **次** であること(`pc` の値で確認)、末尾 `]` からの終了(8.8)
 - **execution.rs**(14.5): 1 回の `step` で `steps` がちょうど +1、コメント文字はステップにならない、停止後 `step` を複数回呼んでも状態不変かつ `Ok(Halted)`、空プログラム、`max_steps = N-1 / N / N+1` の境界(ちょうど N 命令のプログラムで N は成功・N-1 はエラー、`limit` と `pc` を検証)、`max_steps = Some(0)`(空/非空)、エラー後の再 `step` が同一エラー、`run` のエラー中断後の観測、`run` と `step` 反復の最終状態一致(11.8)、停止済み `run` の冪等
 - **observation.rs**: `snapshot` の各フィールドと `halted`、`tape().len() == TAPE_SIZE`、`Display` 文面に原因・数値が含まれ、ソース文字列や入力バイト列が含まれないこと(13.4-13.7)、`Error` トレイトとして `Box<dyn Error>` へ変換できること(13.8)
-- **integration.rs**(14.6): `fixtures/hello.bf` で出力が `b"Hello World!\n"`、`fixtures/echo.bf` に任意のバイト列(0x00 / 0xFF を含む)を与えて同一バイト列が出力され EOF で停止
+- **integration.rs**(14.6): `fixtures/hello.bf` で出力が `b"Hello World!\n"`、`fixtures/echo.bf`(`,[.,]`)に 0x01〜0xFF(0xFF を含む)のバイト列を与えて同一バイト列が出力され EOF で停止。入力中の 0x00 は EOF と同じくセルが 0 になるためループを抜けて停止する(0x00 を含む任意バイト列の同一出力は原理的に不可能)
 - **regression.rs**(14.7): 追加規約と、規約の実証用の初期ケース 1 件(`+[-]` が末尾 `]` 後に停止すること)。以降は不具合発生ごとに追加
 
 ### Performance
