@@ -4,6 +4,7 @@
 //! 停止は `pc` が命令数と等しいことで表す。
 
 use crate::error::RuntimeError;
+use crate::instruction::Instruction;
 use crate::parser::Program;
 
 /// テープのセル数。データポインタの有効範囲は `0..TAPE_SIZE` である。
@@ -126,8 +127,32 @@ impl Machine {
     /// 上限に達していて未停止なら、命令を実行せず `RuntimeError::StepLimitExceeded` を返す。
     /// 範囲外のポインタ移動は `RuntimeError::PointerOutOfBounds` を返し、状態を変更しない。
     pub fn step(&mut self) -> Result<StepResult, RuntimeError> {
-        // 本体は未実装であり、呼び出すと panic する。
-        unimplemented!("命令の実行規則は未実装である")
+        // 判定順序: 停止済み → ステップ上限到達かつ未停止 → 命令実行。
+        if self.is_halted() {
+            return Ok(StepResult::Halted);
+        }
+        if let Some(limit) = self.config.max_steps {
+            if self.steps_executed >= limit {
+                return Err(RuntimeError::StepLimitExceeded { limit, pc: self.pc });
+            }
+        }
+        // 未停止のため `pc` は命令添字の範囲内にある。
+        match self.program.instructions()[self.pc] {
+            Instruction::Increment => {
+                let cell = &mut self.tape[self.dp];
+                *cell = cell.wrapping_add(1);
+            }
+            Instruction::Decrement => {
+                let cell = &mut self.tape[self.dp];
+                *cell = cell.wrapping_sub(1);
+            }
+            // ポインタ移動・入出力・ループ命令は後続タスク(4.3〜4.5)で実装する。
+            _ => unimplemented!("この命令の実行規則は後続タスクで実装する"),
+        }
+        // 検証と状態更新が成功した場合のみ、実行数と `pc` を進める。
+        self.steps_executed = self.steps_executed.saturating_add(1);
+        self.pc += 1;
+        Ok(StepResult::Executed)
     }
 
     /// 停止するまで命令を繰り返し実行する。
