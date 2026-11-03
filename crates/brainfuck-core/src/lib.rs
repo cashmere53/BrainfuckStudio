@@ -11,3 +11,4 @@ pub mod parser;
 
 pub use error::{ParseError, PointerDirection, RuntimeError};
 pub use instruction::Instruction;
+pub use parser::Program;
