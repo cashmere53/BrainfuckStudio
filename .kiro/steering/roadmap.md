@@ -32,13 +32,15 @@
   - CLI と GUI の結果一致(同一入力で同一出力)
 
 ## Specs (dependency order)
+> チェックボックスは **実装完了** を表す(各 spec の `spec.json` の `phase` が `implementation-complete`、かつ最終検証が GO)。`[ ]` は要件・設計・タスクが承認済みで実装待ち(`phase: tasks-generated`)の状態を指す。
 - [x] brainfuck-core -- Cargo workspace、命令/パーサ(jump_table)/Machine/エラー/スナップショット/step/run/ステップ制限と単体テスト。Dependencies: none
 - [x] brainfuck-cli -- ファイル/stdin 入力、stdout/stderr 分離、終了コード 0/2/3/4、`--max-steps` 等、`examples/hello.bf`、README。Dependencies: brainfuck-core
-- [x] debugger-state -- Phase 1.5: ブレークポイント、StopReason(Breakpoint/Cancelled)、バッチ実行(既定1,000命令)、テープ表示窓(±16)、命令添字→ソース範囲/行・列変換。Dependencies: brainfuck-core
-- [x] desktop-gui -- Phase 2: Tauri 2 + React + CodeMirror 6、Run/Pause/Step/Reset、テープ/出力/状態ビュー、括弧対応・現在命令強調、DTO と Tauri コマンド(最小 6 コマンドを含む。詳細は desktop-gui の design)、CLI 一致検証。Dependencies: debugger-state, brainfuck-cli, brainfuck-core
-- [x] optimized-interpreter -- Phase 3: IR、連続命令統合、代表的ループ最適化、素朴実装とのディファレンシャルテスト、ベンチマーク(正規テストと分離)。Dependencies: brainfuck-core
-- [x] compiler-comparison -- Phase 4: WASM またはネイティブ AOT の少なくとも一方、方式・実行時間・命令数・終了状態を表示する比較画面。Dependencies: optimized-interpreter, desktop-gui, brainfuck-core
+- [ ] debugger-state -- Phase 1.5: ブレークポイント、StopReason(Breakpoint/Cancelled)、バッチ実行(既定1,000命令)、テープ表示窓(±16)、命令添字→ソース範囲/行・列変換。Dependencies: brainfuck-core
+- [ ] desktop-gui -- Phase 2: Tauri 2 + React + CodeMirror 6、Run/Pause/Step/Reset、テープ/出力/状態ビュー、括弧対応・現在命令強調、DTO と Tauri コマンド(最小 6 コマンドを含む。詳細は desktop-gui の design)、CLI 一致検証。Dependencies: debugger-state, brainfuck-cli, brainfuck-core
+- [ ] optimized-interpreter -- Phase 3: IR、連続命令統合、代表的ループ最適化、素朴実装とのディファレンシャルテスト、ベンチマーク(正規テストと分離)。Dependencies: brainfuck-core
+- [ ] compiler-comparison -- Phase 4: WASM またはネイティブ AOT の少なくとも一方、方式・実行時間・命令数・終了状態を表示する比較画面。Dependencies: optimized-interpreter, desktop-gui, brainfuck-core
 
 ## Notes
 - compiler-comparison のタスクグループ 1〜3(WASM バックエンドと比較ロジック)は optimized-interpreter のみに依存し、desktop-gui 完了前に着手できる。グループ 4〜7(GUI 統合)は desktop-gui に依存する
 - 各 spec の design で追加された crate は structure.md を参照
+- 実装状況(2026-11-04 時点): brainfuck-core と brainfuck-cli(要件→テストの対応は `.kiro/specs/brainfuck-cli/traceability.md`)が実装完了。debugger-state / optimized-interpreter は brainfuck-core のみに依存するため並行して着手できる。desktop-gui は debugger-state の完了後、compiler-comparison は optimized-interpreter(グループ 1〜3)の完了後に着手する
