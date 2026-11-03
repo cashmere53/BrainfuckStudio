@@ -215,8 +215,14 @@ impl Machine {
     /// 実行設定が命令数の上限を持たない場合、プログラムが終了しなければ戻らない可能性がある。
     /// 無限ループを含むプログラムに対しては、呼び出し側が上限を設定する責務を負う。
     pub fn run(&mut self) -> Result<StopReason, RuntimeError> {
-        // 本体は未実装であり、呼び出すと panic する。
-        unimplemented!("完走実行は未実装である")
+        // `step` の結果が `Executed` の間だけ繰り返す。実行エラーは `?` で即座に返し、
+        // その時点の状態(出力・テープ・pc・dp・実行数)をそのまま保持する。
+        loop {
+            match self.step()? {
+                StepResult::Executed => continue,
+                StepResult::Halted => return Ok(StopReason::Halted),
+            }
+        }
     }
 
     /// 現在の状態を変更せずに観測する。
