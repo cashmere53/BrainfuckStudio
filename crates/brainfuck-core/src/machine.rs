@@ -168,7 +168,22 @@ impl Machine {
                 }
                 self.dp -= 1;
             }
-            // 入出力・ループ命令は後続タスク(4.4〜4.5)で実装する。
+            Instruction::Output => {
+                // 出力は現在セルの値を 1 バイトとして末尾に追加する。状態検証は不要。
+                self.output.push(self.tape[self.dp]);
+            }
+            Instruction::Input => {
+                // 未読の入力があれば次の 1 バイトを格納し、読取位置を進める。
+                // 入力が尽きていれば現在セルに 0 を格納し、読取位置は進めない。
+                match self.input.get(self.input_pos) {
+                    Some(&byte) => {
+                        self.tape[self.dp] = byte;
+                        self.input_pos += 1;
+                    }
+                    None => self.tape[self.dp] = 0,
+                }
+            }
+            // ループ命令は後続タスク(4.5)で実装する。
             _ => unimplemented!("この命令の実行規則は後続タスクで実装する"),
         }
         // 検証と状態更新が成功した場合のみ、実行数と `pc` を進める。
