@@ -19,7 +19,7 @@ cargo run -p brainfuck-cli -- examples/hello.bf
 ## 使用方法
 
 ```sh
-brainfuck-cli <PROGRAM> [OPTIONS]
+brainfuck-cli [OPTIONS] <PROGRAM>
 ```
 
 `<PROGRAM>` には Brainfuck のソースファイルを 1 つ指定します。オプションは `--name value` と `--name=value` のどちらの形式でも指定でき、`<PROGRAM>` の前後どちらに置いても構いません。
