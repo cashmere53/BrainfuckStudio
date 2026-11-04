@@ -1,0 +1,62 @@
+/* 共通スタイル基盤: 配色トークンと、色以外の手がかり用の共通クラス。6.x・7.x は変更しない */
+:root {
+  color-scheme: light dark;
+  --color-bg: #ffffff;
+  --color-fg: #1f2328;
+  --color-muted: #59636e;
+  --color-accent: #0969da;
+  --color-border: #8c959f;
+  --color-current: #fff8c5;
+  --color-error: #cf222e;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0d1117;
+    --color-fg: #e6edf3;
+    --color-muted: #9198a1;
+    --color-accent: #4493f8;
+    --color-border: #6e7681;
+    --color-current: #3d2e00;
+    --color-error: #ff7b72;
+  }
+}
+
+/* 色以外の手がかり: 下線・枠・マーカー */
+.cue-underline {
+  text-decoration: underline wavy currentColor;
+  text-underline-offset: 3px;
+}
+
+.cue-frame {
+  outline: 2px solid var(--color-fg);
+  outline-offset: -2px;
+}
+
+.cue-marker {
+  background-color: var(--color-current);
+  font-weight: 700;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+
+/* 最小 800 × 600 でレイアウトを保ち、それより小さい場合はスクロールさせる */
+#root {
+  height: 100%;
+}
+
+.app-shell {
+  box-sizing: border-box;
+  min-width: 800px;
+  min-height: 600px;
+  height: 100%;
+  overflow: auto;
+}
