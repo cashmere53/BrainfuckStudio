@@ -3,15 +3,41 @@
 //! 最適化済みプログラムを、一括適用([`crate::fast`])と縮退再生([`crate::replay`])で完走まで実行する。
 //! 縮退経路は公開の再生関数の呼び出しのみで実現し、この crate に素朴意味論の別実装を持たない。
 //!
-//! 観測 API(スナップショット・テープ参照など)は 3.6 で追加する。本タスクのテストは内部状態を直接読む。
-
-#![allow(dead_code)]
+//! 観測 API(スナップショット・テープ・出力・入力位置・停止状態)は読み取り専用で、状態を変更しない。
 
 use crate::fast::{execute, FastOutcome};
 use crate::ir::OptimizedProgram;
 use crate::replay::{replay, Replayed};
 use crate::state::ExecState;
 use brainfuck_core::{MachineConfig, RuntimeError, StopReason};
+
+/// 実行状態の観測結果(読み取り専用の値)。
+///
+/// 実行数は 2 種類あり、名称どおりに別の定義である。
+/// - `steps_executed` は素朴実装換算(実行した命令の総数)。素朴実装が同一時点で数える値と常に一致する。
+/// - `ir_ops_executed` は IR 操作の実行回数(方式固有)。一括適用した操作のみを数え、縮退再生の命令は数えない。
+///   縮退後は素朴再生で進むため更新されず、フォールバックが起きるまでに一括適用した IR 操作数を表す。
+///
+/// 常に `ir_ops_executed <= steps_executed` が成り立つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OptimizedSnapshot {
+    /// 命令添字。実行前は先頭操作の先頭の命令添字(操作が無ければ命令数)、停止時は命令数、
+    /// エラー確定後はエラーが報告する添字。
+    pub pc: usize,
+    /// データポインタ(`0..TAPE_SIZE`)。
+    pub data_pointer: usize,
+    /// 現在のセルの値。
+    pub current_cell: u8,
+    /// 素朴実装換算の実行数(実行した命令の総数)。
+    pub steps_executed: u64,
+    /// IR 操作の実行回数。一括適用のみを数え、縮退再生の命令は数えない(フォールバック前までの操作数)。
+    pub ir_ops_executed: u64,
+    /// `Ok(StopReason::Halted)` が確定しているかどうか。
+    pub halted: bool,
+    /// 読み取り済みの入力バイト数。
+    pub input_position: usize,
+}
 
 /// 最適化済みプログラムの実行機械。
 ///
@@ -79,6 +105,62 @@ impl<'p> OptimizedMachine<'p> {
         };
         self.outcome = Some(done);
         done.result
+    }
+
+    /// 現在の観測結果を返す(読み取り専用。状態は変更しない)。
+    pub fn snapshot(&self) -> OptimizedSnapshot {
+        let replay = &self.state.replay;
+        OptimizedSnapshot {
+            pc: self.pc(),
+            data_pointer: replay.data_pointer(),
+            current_cell: replay.tape()[replay.data_pointer()],
+            steps_executed: replay.steps_executed(),
+            ir_ops_executed: self.state.ir_ops_executed,
+            halted: self.is_halted(),
+            input_position: replay.input_position(),
+        }
+    }
+
+    /// テープ全体(長さ `TAPE_SIZE`)を読み取り専用で返す。
+    pub fn tape(&self) -> &[u8] {
+        self.state.replay.tape()
+    }
+
+    /// これまでに出力されたバイト列全体を読み取り専用で返す。
+    pub fn output(&self) -> &[u8] {
+        self.state.replay.output()
+    }
+
+    /// 読み取り済みの入力バイト数を返す。
+    pub fn input_position(&self) -> usize {
+        self.state.replay.input_position()
+    }
+
+    /// `Ok(StopReason::Halted)` が確定しているかを返す。エラー確定後と実行前は偽。
+    pub fn is_halted(&self) -> bool {
+        matches!(
+            self.outcome,
+            Some(Replayed {
+                result: Ok(StopReason::Halted),
+                ..
+            })
+        )
+    }
+
+    /// 借用している最適化済みプログラムを返す。
+    pub fn program(&self) -> &'p OptimizedProgram {
+        self.program
+    }
+
+    /// `pc` の現在値。確定後は確定時の `pc`、確定前は次に実行する操作の先頭の命令添字。
+    fn pc(&self) -> usize {
+        match self.outcome {
+            Some(done) => done.pc,
+            None => match self.program.ops().get(self.state.ir_pc) {
+                Some(op) => op.source_range().start,
+                None => self.program.source().len(),
+            },
+        }
     }
 }
 
@@ -301,5 +383,176 @@ mod tests {
         );
         assert_eq!(machine.state.replay.steps_executed(), 3);
         assert_matches_core("+[]", &[], MachineConfig::with_max_steps(3));
+    }
+
+    /// 観測 API(スナップショット・テープ・出力・入力位置・停止状態)を core の同名項目と比較する。
+    fn assert_observations_match_core(source: &str, input: &[u8], config: MachineConfig) {
+        let mut core = Machine::new(
+            Program::parse(source).expect("valid program"),
+            input.to_vec(),
+            config,
+        );
+        let _ = core.run();
+        let core_snapshot = core.snapshot();
+
+        let program = compiled(source);
+        let mut machine = OptimizedMachine::new(&program, input.to_vec(), config);
+        let _ = machine.run();
+        let snapshot = machine.snapshot();
+        let label = format!("source {source:?}, input {input:?}, config {config:?}");
+        assert_eq!(snapshot.pc, core_snapshot.pc, "pc: {label}");
+        assert_eq!(
+            snapshot.data_pointer, core_snapshot.data_pointer,
+            "data pointer: {label}"
+        );
+        assert_eq!(
+            snapshot.current_cell, core_snapshot.current_cell,
+            "current cell: {label}"
+        );
+        assert_eq!(
+            snapshot.steps_executed, core_snapshot.steps_executed,
+            "steps: {label}"
+        );
+        assert_eq!(snapshot.halted, core_snapshot.halted, "halted: {label}");
+        assert_eq!(machine.tape(), core.tape(), "tape: {label}");
+        assert_eq!(machine.output(), core.output(), "output: {label}");
+        assert_eq!(
+            machine.input_position(),
+            core.input_position(),
+            "input position: {label}"
+        );
+        assert_eq!(
+            snapshot.input_position,
+            core.input_position(),
+            "snapshot input position: {label}"
+        );
+        assert_eq!(machine.is_halted(), core.is_halted(), "halted: {label}");
+        assert!(
+            snapshot.ir_ops_executed <= snapshot.steps_executed,
+            "ir ops exceed steps: {label}"
+        );
+    }
+
+    #[test]
+    fn snapshot_before_run_reports_the_initial_position() {
+        let program = compiled("++[-]");
+        let machine = OptimizedMachine::new(&program, vec![4], MachineConfig::unlimited());
+        let snapshot = machine.snapshot();
+        assert_eq!(snapshot.pc, 0);
+        assert_eq!(snapshot.data_pointer, 0);
+        assert_eq!(snapshot.current_cell, 0);
+        assert_eq!(snapshot.steps_executed, 0);
+        assert_eq!(snapshot.ir_ops_executed, 0);
+        assert!(!snapshot.halted);
+        assert_eq!(snapshot.input_position, 0);
+        assert!(!machine.is_halted());
+    }
+
+    #[test]
+    fn empty_program_is_not_halted_before_run() {
+        let program = compiled("");
+        let machine = OptimizedMachine::new(&program, Vec::new(), MachineConfig::unlimited());
+        assert_eq!(machine.snapshot().pc, 0);
+        assert!(!machine.snapshot().halted);
+        assert!(!machine.is_halted());
+    }
+
+    #[test]
+    fn snapshot_at_halt_reports_both_execution_counts() {
+        // 素朴換算 16 に対し、IR 操作は `+++++` と `[-]` の 2 回。
+        let program = compiled("+++++[-]");
+        let mut machine = OptimizedMachine::new(&program, Vec::new(), MachineConfig::unlimited());
+        assert_eq!(machine.run(), Ok(StopReason::Halted));
+        let snapshot = machine.snapshot();
+        assert_eq!(snapshot.pc, 8);
+        assert_eq!(snapshot.data_pointer, 0);
+        assert_eq!(snapshot.current_cell, 0);
+        assert_eq!(snapshot.steps_executed, 16);
+        assert_eq!(snapshot.ir_ops_executed, 2);
+        assert!(snapshot.halted);
+        assert_eq!(snapshot.input_position, 0);
+        assert!(machine.is_halted());
+        assert_observations_match_core("+++++[-]", &[], MachineConfig::unlimited());
+    }
+
+    #[test]
+    fn snapshot_at_out_of_bounds_reports_the_error_position() {
+        // `+++` は 1 回の一括適用(IR 操作 1)、`<` は範囲外の縮退で素朴再生が報告する。
+        let program = compiled("+++<");
+        let mut machine = OptimizedMachine::new(&program, Vec::new(), MachineConfig::unlimited());
+        assert!(machine.run().is_err());
+        let snapshot = machine.snapshot();
+        assert_eq!(snapshot.pc, 3);
+        assert_eq!(snapshot.data_pointer, 0);
+        assert_eq!(snapshot.current_cell, 3);
+        assert_eq!(snapshot.steps_executed, 3);
+        assert_eq!(snapshot.ir_ops_executed, 1);
+        assert!(!snapshot.halted);
+        assert!(!machine.is_halted());
+        assert_observations_match_core("+++<", &[], MachineConfig::unlimited());
+    }
+
+    #[test]
+    fn snapshot_at_step_limit_matches_the_core_position() {
+        let program = compiled("+++++[-]");
+        let mut machine =
+            OptimizedMachine::new(&program, Vec::new(), MachineConfig::with_max_steps(10));
+        assert!(machine.run().is_err());
+        let snapshot = machine.snapshot();
+        assert_eq!(snapshot.steps_executed, 10);
+        assert_eq!(snapshot.ir_ops_executed, 1);
+        assert!(!snapshot.halted);
+        assert_observations_match_core("+++++[-]", &[], MachineConfig::with_max_steps(10));
+    }
+
+    #[test]
+    fn observation_reads_do_not_change_the_state() {
+        let program = compiled(",[.,]");
+        let mut machine = OptimizedMachine::new(&program, vec![1, 2], MachineConfig::unlimited());
+        assert_eq!(machine.run(), Ok(StopReason::Halted));
+        let before = machine.state.clone();
+        let first = machine.snapshot();
+        let _ = machine.snapshot();
+        let _ = machine.tape();
+        let _ = machine.output();
+        let _ = machine.input_position();
+        let _ = machine.is_halted();
+        let _ = machine.program();
+        assert_eq!(machine.snapshot(), first);
+        assert_eq!(machine.state, before);
+    }
+
+    #[test]
+    fn observations_match_the_core_machine_for_representative_programs() {
+        assert_observations_match_core("++++++++[>++++++++<-]>+.", &[], MachineConfig::unlimited());
+        assert_observations_match_core("+>+>+<<[>]", &[], MachineConfig::unlimited());
+        assert_observations_match_core("+++[->++<]", &[], MachineConfig::unlimited());
+        assert_observations_match_core("-.", &[], MachineConfig::unlimited());
+        assert_observations_match_core(",[.,]", &[0x00, 0xFF, 7], MachineConfig::unlimited());
+        assert_observations_match_core("<", &[], MachineConfig::unlimited());
+        assert_observations_match_core("+[>+.<-]", &[], MachineConfig::unlimited());
+    }
+
+    #[test]
+    fn observations_match_the_core_machine_at_every_step_limit() {
+        let sources = [
+            "++++++++[>++++++++<-]>+.",
+            "+++++[-]",
+            "+>+>+<<[>]",
+            "+++[->++<]",
+            "-[+]",
+            ",[.,]",
+            "+[]",
+            "+[>+]",
+        ];
+        for source in sources {
+            for limit in 0..=40 {
+                assert_observations_match_core(
+                    source,
+                    &[1, 2, 3],
+                    MachineConfig::with_max_steps(limit),
+                );
+            }
+        }
     }
 }

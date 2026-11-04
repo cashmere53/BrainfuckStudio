@@ -3,10 +3,6 @@
 //! 一括適用(`fast`)と縮退再生(`replay`)が共有する状態。素朴再生の状態([`ReplayState`])に、
 //! IR 上の位置と IR 操作の実行回数を足したものである。テープ等を二重に持たない。
 //! `ir_ops_executed` は [`ReplayState`] の外にあるため、縮退経路は構造的にそれを更新できない。
-//!
-//! 呼び出し元は 3.6 で揃うため、それまで未使用警告を許可する(3.6 で除去する)。
-
-#![allow(dead_code)]
 
 use crate::replay::ReplayState;
 

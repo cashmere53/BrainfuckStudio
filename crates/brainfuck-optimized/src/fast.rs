@@ -6,10 +6,6 @@
 //!
 //! クリアと移動/加算/乗算(`Clear` / `Transfer`)は 3.3、走査(`Scan`)は 3.4 で一括適用を実装した。
 //!
-//! 呼び出し元は 3.6 で揃うため、それまで未使用警告を許可する(3.6 で除去する)。
-
-#![allow(dead_code)]
-
 use crate::ir::{Op, OpKind, Term};
 use crate::state::ExecState;
 use brainfuck_core::TAPE_SIZE;
