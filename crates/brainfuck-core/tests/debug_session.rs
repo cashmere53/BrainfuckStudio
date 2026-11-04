@@ -7,10 +7,12 @@
 mod debug_common;
 
 use brainfuck_core::{
-    BatchSize, DebugSession, Machine, MachineConfig, Program, RuntimeError, StepResult, StopReason,
-    DEFAULT_BATCH_SIZE, DEFAULT_WINDOW_RADIUS,
+    BatchSize, CancelFn, DebugSession, Machine, MachineConfig, NeverCancel, Program, RuntimeError,
+    StepResult, StopReason, DEFAULT_BATCH_SIZE, DEFAULT_WINDOW_RADIUS,
 };
-use debug_common::session_from;
+use debug_common::{cancel_after, session_from};
+use std::cell::Cell;
+use std::sync::atomic::AtomicBool;
 
 /// 値が `Send` であることをコンパイル時に確認する。
 fn assert_send<T: Send>() {}
@@ -248,4 +250,286 @@ fn reset_after_step_into_restores_creation_state_and_keeps_breakpoints() {
     assert!(session.breakpoints().contains(2));
     assert_eq!(session.step_into(), Ok(StepResult::Executed));
     assert_eq!(session.snapshot().pc, 1);
+}
+
+// ---- バッチ実行(タスク 3.3) ----
+
+fn batch(n: u64) -> BatchSize {
+    BatchSize::new(n).expect("テストのバッチ命令数は 1 以上")
+}
+
+#[test]
+fn batch_reports_halted_when_the_last_instruction_of_the_batch_halts() {
+    let mut session = session_from("+", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(1), &NeverCancel);
+
+    assert_eq!(report.stop, Ok(StopReason::Halted));
+    assert_eq!(report.executed, 1);
+    assert!(report.snapshot.halted);
+    assert_eq!(session.last_stop(), Some(StopReason::Halted));
+}
+
+#[test]
+fn batch_reports_halted_when_halting_coincides_with_the_batch_width() {
+    let mut session = session_from("+>+", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(3), &NeverCancel);
+
+    assert_eq!(report.stop, Ok(StopReason::Halted));
+    assert_eq!(report.executed, 3);
+    assert_eq!(report.snapshot.pc, 3);
+}
+
+#[test]
+fn batch_of_exact_width_without_halting_reports_step_limit_reached() {
+    let mut session = session_from("+>+>+>", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(3), &NeverCancel);
+
+    assert_eq!(report.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(report.executed, 3);
+    assert_eq!(report.snapshot.pc, 3);
+    assert!(!report.snapshot.halted);
+    assert_eq!(session.last_stop(), Some(StopReason::StepLimitReached));
+}
+
+#[test]
+fn batch_one_instruction_short_of_halting_reports_step_limit_reached() {
+    let mut session = session_from("+>+", b"", MachineConfig::unlimited());
+
+    let first = session.run_batch(batch(2), &NeverCancel);
+    assert_eq!(first.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(first.executed, 2);
+    assert!(!first.snapshot.halted);
+
+    let second = session.run_batch(batch(1), &NeverCancel);
+    assert_eq!(second.stop, Ok(StopReason::Halted));
+    assert_eq!(second.executed, 1);
+    assert_eq!(second.snapshot.steps_executed, 3);
+}
+
+#[test]
+fn halted_session_reports_halted_without_executing_and_is_idempotent() {
+    let mut session = session_from("+", b"", MachineConfig::unlimited());
+    session.run_batch(batch(1), &NeverCancel);
+    let before = session.machine().clone();
+
+    for _ in 0..2 {
+        let report = session.run_batch(batch(5), &NeverCancel);
+        assert_eq!(report.stop, Ok(StopReason::Halted));
+        assert_eq!(report.executed, 0);
+        assert_eq!(report.snapshot, before.snapshot());
+        assert_eq!(session.machine(), &before);
+        assert_eq!(session.last_stop(), Some(StopReason::Halted));
+    }
+}
+
+#[test]
+fn report_snapshot_is_the_machine_snapshot_at_notification() {
+    let mut session = session_from("+>++", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(3), &NeverCancel);
+
+    assert_eq!(report.snapshot, session.snapshot());
+    assert_eq!(report.snapshot.steps_executed, 3);
+    assert_eq!(report.snapshot.data_pointer, 1);
+    assert_eq!(report.snapshot.current_cell, 1);
+}
+
+#[test]
+fn executed_counts_one_per_instruction_and_not_per_batch_call() {
+    // 命令は 5 個。幅 2 のバッチは 3 回呼ばれ、実行数の合計は命令数 5 と一致する。
+    let mut session = session_from("++>+<", b"", MachineConfig::unlimited());
+    let mut total_executed = 0u64;
+    let mut calls = 0usize;
+
+    loop {
+        let report = session.run_batch(batch(2), &NeverCancel);
+        calls += 1;
+        total_executed += report.executed;
+        assert_eq!(total_executed, report.snapshot.steps_executed);
+        if report.stop != Ok(StopReason::StepLimitReached) {
+            assert_eq!(report.stop, Ok(StopReason::Halted));
+            break;
+        }
+        assert_eq!(report.executed, 2);
+    }
+
+    assert_eq!(calls, 3);
+    assert_eq!(total_executed, 5);
+    assert_eq!(session.snapshot().steps_executed, 5);
+}
+
+#[test]
+fn step_limit_exceeded_is_an_error_and_repeats_the_same_error_without_change() {
+    // `+[]` は無限ループ。上限 3 では 3 命令実行後の 4 命令目の要求がステップ制限超過になる。
+    let mut session = session_from("+[]", b"", MachineConfig::with_max_steps(3));
+    // 先に `StepLimitReached` で終わらせて `last_stop` を `Some` にし、エラーで消去されることを確認する。
+    let warm = session.run_batch(batch(1), &NeverCancel);
+    assert_eq!(warm.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(session.last_stop(), Some(StopReason::StepLimitReached));
+
+    let first = session.run_batch(batch(10), &NeverCancel);
+    assert!(matches!(
+        first.stop,
+        Err(RuntimeError::StepLimitExceeded { limit: 3, .. })
+    ));
+    assert_eq!(first.executed, 2);
+    assert_eq!(first.snapshot.steps_executed, 3);
+    assert!(!first.snapshot.halted);
+    assert_eq!(session.last_stop(), None);
+    let before = session.machine().clone();
+
+    let second = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(second.stop, first.stop);
+    assert_eq!(second.executed, 0);
+    assert_eq!(second.snapshot, first.snapshot);
+    assert_eq!(session.machine(), &before);
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn pointer_out_of_bounds_is_an_error_with_executed_count_and_clears_last_stop() {
+    // `+` が 1 命令実行された後、`<` で dp が範囲外になる。
+    let mut session = session_from("+<+", b"", MachineConfig::unlimited());
+    let warm = session.run_batch(batch(1), &NeverCancel);
+    assert_eq!(warm.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(session.last_stop(), Some(StopReason::StepLimitReached));
+
+    let report = session.run_batch(batch(10), &NeverCancel);
+
+    assert!(matches!(
+        report.stop,
+        Err(RuntimeError::PointerOutOfBounds { pc: 1, dp: 0, .. })
+    ));
+    assert_eq!(report.executed, 0);
+    assert_eq!(report.snapshot.pc, 1);
+    assert_eq!(report.snapshot.data_pointer, 0);
+    assert_eq!(report.snapshot.current_cell, 1);
+    assert_eq!(report.snapshot.steps_executed, 1);
+    assert_eq!(session.last_stop(), None);
+    let before = session.machine().clone();
+
+    let again = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(again.stop, report.stop);
+    assert_eq!(again.executed, 0);
+    assert_eq!(session.machine(), &before);
+}
+
+#[test]
+fn already_active_cancel_reports_cancelled_without_executing() {
+    let mut session = session_from("+>+", b"", MachineConfig::unlimited());
+    let before = session.machine().clone();
+    let cancel = AtomicBool::new(true);
+
+    let report = session.run_batch(batch(5), &cancel);
+
+    assert_eq!(report.stop, Ok(StopReason::Cancelled));
+    assert_eq!(report.executed, 0);
+    assert_eq!(session.machine(), &before);
+    assert_eq!(session.last_stop(), Some(StopReason::Cancelled));
+}
+
+#[test]
+fn halted_session_reports_halted_even_when_cancel_is_active() {
+    let mut session = session_from("+", b"", MachineConfig::unlimited());
+    session.run_batch(batch(1), &NeverCancel);
+    let before = session.machine().clone();
+    let cancel = AtomicBool::new(true);
+
+    let report = session.run_batch(batch(5), &cancel);
+
+    assert_eq!(report.stop, Ok(StopReason::Halted));
+    assert_eq!(report.executed, 0);
+    assert_eq!(session.machine(), &before);
+}
+
+#[test]
+fn cancel_observed_before_an_instruction_stops_before_executing_it() {
+    // 2 回の確認まで偽、3 回目の確認(3 命令目の直前)から真。
+    let mut session = session_from("+>+>+>", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(10), &cancel_after(2));
+
+    assert_eq!(report.stop, Ok(StopReason::Cancelled));
+    assert_eq!(report.executed, 2);
+    assert_eq!(report.snapshot.pc, 2);
+    assert_eq!(report.snapshot.steps_executed, 2);
+    assert_eq!(session.last_stop(), Some(StopReason::Cancelled));
+}
+
+#[test]
+fn cancel_at_the_batch_width_boundary_reports_cancelled_before_width() {
+    // 2 回の確認まで偽、3 回目の確認は幅 2 に達したちょうどの位置で真になる。
+    // キャンセルの判定は幅の判定より前なので `StepLimitReached` ではなく `Cancelled` になる。
+    let mut session = session_from("+>+>+>", b"", MachineConfig::unlimited());
+
+    let report = session.run_batch(batch(2), &cancel_after(2));
+
+    assert_eq!(report.stop, Ok(StopReason::Cancelled));
+    assert_eq!(report.executed, 2);
+    assert_eq!(report.snapshot.pc, 2);
+    assert_eq!(report.snapshot.steps_executed, 2);
+    assert_eq!(session.last_stop(), Some(StopReason::Cancelled));
+}
+
+#[test]
+fn cancel_is_checked_once_per_instruction_plus_once_at_the_width_boundary() {
+    // 幅 3 で 3 命令を実行し、4 回目の反復で幅に達して止まる。確認は命令ごとに 1 回 + 幅到達時の 1 回。
+    let mut session = session_from("+>+>+>", b"", MachineConfig::unlimited());
+    let calls = Cell::new(0usize);
+    let counting = CancelFn(|| {
+        calls.set(calls.get() + 1);
+        false
+    });
+
+    let report = session.run_batch(batch(3), &counting);
+
+    assert_eq!(report.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(report.executed, 3);
+    assert_eq!(calls.get(), report.executed as usize + 1);
+}
+
+#[test]
+fn step_into_pointer_out_of_bounds_after_step_limit_batch_clears_last_stop() {
+    let mut session = session_from("+<", b"", MachineConfig::unlimited());
+    let warm = session.run_batch(batch(1), &NeverCancel);
+    assert_eq!(warm.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(session.last_stop(), Some(StopReason::StepLimitReached));
+
+    assert!(matches!(
+        session.step_into(),
+        Err(RuntimeError::PointerOutOfBounds { pc: 1, dp: 0, .. })
+    ));
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn step_into_step_limit_exceeded_after_step_limit_batch_clears_last_stop() {
+    // `+[]` は上限 3 で、3 命令実行後の要求は幅で止まる。続く step_into の 4 命令目がステップ制限超過になる。
+    let mut session = session_from("+[]", b"", MachineConfig::with_max_steps(3));
+    let warm = session.run_batch(batch(3), &NeverCancel);
+    assert_eq!(warm.stop, Ok(StopReason::StepLimitReached));
+    assert_eq!(session.last_stop(), Some(StopReason::StepLimitReached));
+
+    assert!(matches!(
+        session.step_into(),
+        Err(RuntimeError::StepLimitExceeded { limit: 3, .. })
+    ));
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn step_into_pointer_out_of_bounds_after_cancelled_batch_clears_last_stop() {
+    let mut session = session_from("+<", b"", MachineConfig::unlimited());
+    let warm = session.run_batch(batch(5), &cancel_after(1));
+    assert_eq!(warm.stop, Ok(StopReason::Cancelled));
+    assert_eq!(session.last_stop(), Some(StopReason::Cancelled));
+
+    assert!(matches!(
+        session.step_into(),
+        Err(RuntimeError::PointerOutOfBounds { pc: 1, dp: 0, .. })
+    ));
+    assert_eq!(session.last_stop(), None);
 }

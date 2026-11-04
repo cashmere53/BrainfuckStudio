@@ -11,6 +11,7 @@
 use std::num::NonZeroU64;
 
 use crate::breakpoint::BreakpointSet;
+use crate::cancel::CancelSignal;
 use crate::error::RuntimeError;
 use crate::machine::{Machine, MachineConfig, MachineSnapshot, StepResult, StopReason};
 use crate::parser::Program;
@@ -164,6 +165,50 @@ impl DebugSession {
                 self.last_stop = None;
                 Err(error)
             }
+        }
+    }
+
+    /// バッチ実行: 最大 `size` 個の有効な命令を、core の `step()` と同じ意味論で実行する(タスク 3.3)。
+    ///
+    /// 各反復の判定順序は次のとおり。
+    /// 1. 停止状態なら実行せず `Halted`(実行数 0 の呼び出しでは状態不変)。
+    /// 2. `cancel` が真を返したら実行せず `Cancelled`。命令の直前にちょうど 1 回だけ問い合わせる。
+    /// 3. (ブレークポイント照合はタスク 3.4 でこの位置に挿入する。本タスクでは行わない)
+    /// 4. 実行数がバッチ命令数に到達していれば `StepLimitReached`。
+    /// 5. `step()` を 1 回呼ぶ。`Executed` なら実行数を加算して 1 へ戻る。`Err` ならそのエラーを返す。
+    ///
+    /// 最後の 1 命令の実行で停止に達した場合は、次の反復の 1 で `Halted` になる(`StepLimitReached` より優先)。
+    /// 機械の命令数上限の超過とポインタ範囲外は `Err` として `stop` に載せ、機械は core の規約どおり不変である。
+    /// 直近の停止理由は `Ok` で終わったら `Some(理由)`、`Err` で終わったら消去する。
+    pub fn run_batch<C: CancelSignal + ?Sized>(
+        &mut self,
+        size: BatchSize,
+        cancel: &C,
+    ) -> BatchReport {
+        let limit = size.get();
+        let mut executed: u64 = 0;
+        let stop = loop {
+            if self.machine.is_halted() {
+                break Ok(StopReason::Halted);
+            }
+            if cancel.is_cancelled() {
+                break Ok(StopReason::Cancelled);
+            }
+            if executed >= limit {
+                break Ok(StopReason::StepLimitReached);
+            }
+            match self.machine.step() {
+                Ok(StepResult::Executed) => executed += 1,
+                // 停止状態は上の判定で除外済みのため到達しない。防御的に `Halted` として扱う。
+                Ok(StepResult::Halted) => break Ok(StopReason::Halted),
+                Err(error) => break Err(error),
+            }
+        };
+        self.last_stop = stop.as_ref().ok().copied();
+        BatchReport {
+            stop,
+            executed,
+            snapshot: self.machine.snapshot(),
         }
     }
 
