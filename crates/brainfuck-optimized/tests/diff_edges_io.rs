@@ -421,6 +421,34 @@ fn left_multiplication_with_nonzero_start_matches_the_core_at_the_left_edge() {
     assert_equivalent(">+++[-<+>]", &[], MachineConfig::unlimited());
 }
 
+/// 開始セルが非 0 で、到達範囲(-2)が左端を越えるが、項の対象(-1)はテープ内に収まる移動/加算/乗算。
+///
+/// `>[<<>+>-]` 相当の本体は正味のポインタ移動が 0 で、開始セルを 1 減らし、一つ左のセルへ加算する。
+/// `dp = 0` と `dp = 1` では本体の 2 つ目の `<` が左端を越えるため範囲外エラー、
+/// `dp = 2` では到達が左端ちょうど(0)に収まり成功する。項の対象だけで判定する実装は誤る。
+#[test]
+fn transfer_reaching_past_the_left_edge_with_in_range_targets_matches_the_core() {
+    let body = "<<>+>-";
+    for start in 0..=2 {
+        let prefix_len = start + 4;
+        let source = format!("{}+++[{}]", moves(0, start), body);
+        let label = format!("start {start}, body {body}");
+        let expected = expected_left_body(start, prefix_len, body);
+        assert_eq!(core_result(&source), expected, "core result: {label}");
+        assert_equivalent(&source, &[], MachineConfig::unlimited());
+    }
+
+    // 代表例: dp = 1 では `<` が 0 へ、2 つ目の `<` が -1 へ移るため、添字 5 の `<` で誤る。
+    assert_eq!(
+        core_result(">+++[<<>+>-]"),
+        pointer_error(6, 0, PointerDirection::Left)
+    );
+    // dp = 2 は到達が左端ちょうど(0)で、成功する。
+    assert_eq!(core_result(">>+++[<<>+>-]"), Ok(StopReason::Halted));
+    assert_equivalent(">+++[<<>+>-]", &[], MachineConfig::unlimited());
+    assert_equivalent(">>+++[<<>+>-]", &[], MachineConfig::unlimited());
+}
+
 /// 全バイト値 0..=255 を入力して出力するエコーを、素朴実装と比較する。
 #[test]
 fn echo_of_every_byte_value_matches_the_core() {

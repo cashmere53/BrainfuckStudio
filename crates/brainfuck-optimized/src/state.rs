@@ -14,7 +14,7 @@ use crate::replay::ReplayState;
 pub(crate) struct ExecState {
     /// 素朴再生の状態(テープ・データポインタ・素朴換算の実行数・入出力)。
     pub(crate) replay: ReplayState,
-    /// IR 操作の実行回数(一括適用と縮退再生の区別に関わらず、操作を 1 回適用するごとに増える)。
+    /// IR 操作の実行回数。一括適用した IR 操作の回数だけを数え、縮退再生の命令は数えない。
     pub(crate) ir_ops_executed: u64,
     /// IR 上の操作添字。
     pub(crate) ir_pc: usize,
