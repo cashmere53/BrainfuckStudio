@@ -1,0 +1,17 @@
+[package]
+name = "brainfuck-gui-api"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brainfuck-core = { path = "../brainfuck-core" }
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }
+ts-rs = "12"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
