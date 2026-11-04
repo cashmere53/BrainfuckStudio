@@ -29,23 +29,39 @@ pub enum OpKind {
     Output,
     /// `,`。1 バイトを入力して現在セルへ格納する。
     Input,
-    /// 最適化対象外ループの `[`。`end` は対応する `LoopEnd` の IR 添字。
-    LoopStart { end: usize },
-    /// 最適化対象外ループの `]`。`start` は対応する `LoopStart` の IR 添字。
-    LoopEnd { start: usize },
+    /// 最適化対象外ループの `[`。
+    LoopStart {
+        /// 対応する `LoopEnd` の IR 添字。
+        end: usize,
+    },
+    /// 最適化対象外ループの `]`。
+    LoopEnd {
+        /// 対応する `LoopStart` の IR 添字。
+        start: usize,
+    },
     /// `[-]`(`increments = false`)/ `[+]`(`increments = true`)。
-    Clear { increments: bool },
+    Clear {
+        /// `[+]` なら `true`、`[-]` なら `false`。
+        increments: bool,
+    },
     /// 開始セルの正味変化が -1、ポインタ正味移動 0 の `+ - > <` のみのループ。
     /// `body_len` は本体の命令数。`reach_min <= 0 <= reach_max` は本体が到達する
     /// 相対位置の範囲。
     Transfer {
+        /// 各項は、開始セルの値 `v` に `factor` を乗じて `offset` の相対位置へ加算することを表す。
         terms: Box<[Term]>,
+        /// 本体の命令数。
         body_len: usize,
+        /// 本体が到達する相対位置の最小値(0 以下)。
         reach_min: isize,
+        /// 本体が到達する相対位置の最大値(0 以上)。
         reach_max: isize,
     },
     /// 同方向移動のみの本体。`stride` の符号が向き、`|stride|` は 1 反復の移動命令数。
-    Scan { stride: isize },
+    Scan {
+        /// 1 反復あたりの移動量(符号が向き、絶対値が 1 反復の移動命令数)。
+        stride: isize,
+    },
 }
 
 /// 元の命令範囲を持つ最適化後の操作。

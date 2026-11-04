@@ -3,6 +3,31 @@
 //! `start_pc` から core の `step()` と同一の判定順序(停止 → 上限 → 命令の検証 → 状態更新)で
 //! 命令を 1 個ずつ再生し、停止またはエラーまで進める。最適化機械の縮退経路であり、下流 crate が
 //! 離脱後の再生に再利用する単一の実装である。素朴意味論の基準は core の `Machine` が所有する。
+//!
+//! 本モジュールの型は IR 操作の実行回数(`ir_ops_executed`)を持たない。報告するのは素朴換算の実行数だけである。
+//! 判定順序と開始位置の扱いは [`replay`] の説明を参照する。上限を指定しない(`limit = None`)場合、
+//! 終了しないプログラムの再生は戻らない。
+//!
+//! # 使用例
+//!
+//! 初期状態の生成、再生、読み戻しを、このモジュールの型と関数だけで行う。
+//!
+//! ```
+//! use brainfuck_core::{Program, StopReason};
+//! use brainfuck_optimized::replay::{replay, ReplayState};
+//!
+//! // 入力 41 を読み、1 を加えて出力する
+//! let program = Program::parse(",+.").expect("括弧は整合している");
+//! let mut state = ReplayState::new(vec![41]);
+//!
+//! let replayed = replay(&program, None, 0, &mut state);
+//! assert_eq!(replayed.pc, 3);
+//! assert_eq!(replayed.result, Ok(StopReason::Halted));
+//!
+//! assert_eq!(state.output(), &[42]);
+//! assert_eq!(state.tape()[0], 42);
+//! assert_eq!(state.steps_executed(), 3);
+//! ```
 
 use brainfuck_core::{Instruction, PointerDirection, Program, RuntimeError, StopReason, TAPE_SIZE};
 use std::error::Error;
