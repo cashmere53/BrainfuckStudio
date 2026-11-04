@@ -8,7 +8,7 @@ mod debug_common;
 use brainfuck_core::{
     tape_window, tape_window_of, MachineConfig, DEFAULT_WINDOW_RADIUS, TAPE_SIZE,
 };
-use debug_common::machine_from;
+use debug_common::{machine_from, session_from};
 
 /// 指定回数の `>` を含むソースを作り、完走させた機械を返す(`dp` を任意の位置へ動かす検証用)。
 fn machine_with_pointer_at(dp: usize) -> brainfuck_core::Machine {
@@ -198,4 +198,50 @@ fn slice_window_borrows_without_changing_the_tape() {
     let before = tape.clone();
     let _ = tape_window_of(&tape, 4, 3);
     assert_eq!(tape, before);
+}
+
+#[test]
+fn session_window_at_creation_matches_the_machine_window() {
+    let session = session_from("+", &[], MachineConfig::unlimited());
+    let window = session.tape_window(DEFAULT_WINDOW_RADIUS);
+    assert_eq!(window.start, 0);
+    assert_eq!(window.cells.len(), 17);
+    assert_eq!(window.pointer_offset, 0);
+    assert_eq!(
+        window,
+        tape_window(session.machine(), DEFAULT_WINDOW_RADIUS)
+    );
+}
+
+#[test]
+fn session_window_delegates_to_the_slice_function_for_every_radius() {
+    let session = session_from("+", &[], MachineConfig::unlimited());
+    let machine = session.machine();
+    for radius in [0usize, 1, DEFAULT_WINDOW_RADIUS, TAPE_SIZE, usize::MAX] {
+        let via_session = session.tape_window(radius);
+        let via_slice = tape_window_of(machine.tape(), machine.snapshot().data_pointer, radius);
+        assert_eq!(via_session, via_slice, "radius {radius}");
+    }
+}
+
+#[test]
+fn state_view_fields_agree_with_the_session_accessors() {
+    let session = session_from("+>+", b"", MachineConfig::unlimited());
+    let view = session.state_view(DEFAULT_WINDOW_RADIUS);
+    assert_eq!(view.snapshot, session.snapshot());
+    assert_eq!(view.tape_window, session.tape_window(DEFAULT_WINDOW_RADIUS));
+    assert_eq!(view.output, session.machine().output());
+    assert_eq!(view.last_stop, session.last_stop());
+    assert_eq!(view.last_stop, None);
+}
+
+#[test]
+fn state_view_window_start_and_offset_sum_to_the_pointer() {
+    let session = session_from("+", &[], MachineConfig::unlimited());
+    let view = session.state_view(4);
+    assert_eq!(
+        view.tape_window.start + view.tape_window.pointer_offset,
+        view.snapshot.data_pointer
+    );
+    assert_eq!(view.output, &[][..]);
 }
