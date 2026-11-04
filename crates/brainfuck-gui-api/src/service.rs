@@ -17,9 +17,9 @@ use crate::codec::{self, CodecError};
 use crate::convert;
 use crate::dto::{
     ApiError, ApiErrorKind, BatchResultDto, BreakpointDto, BreakpointsDto, LoadSourceRequest,
-    LoadSourceResult, RunBatchRequest, SessionStartedDto, SessionStateDto, SessionViewRequest,
-    StartSessionRequest, StepLimitDto, StepResultDto, TapeWindowDto, TapeWindowRequest,
-    ViewRequestDto,
+    LoadSourceResult, PauseRequest, RunBatchRequest, SessionStartedDto, SessionStateDto,
+    SessionViewRequest, SetBreakpointsRequest, StartSessionRequest, StepLimitDto, StepResultDto,
+    TapeWindowDto, TapeWindowRequest, ViewRequestDto,
 };
 use crate::limits::{
     MAX_BATCH_SIZE, MAX_BREAKPOINT_OFFSETS, MAX_INPUT_BYTES, MAX_SOURCE_BYTES, MAX_STEP_LIMIT,
@@ -251,6 +251,58 @@ impl DebuggerService {
         Ok(convert::tape_window_dto(
             &slot.session.tape_window(req.radius),
         ))
+    }
+
+    /// ブレークポイントを置換する(追加ではなく全体の入れ替え)。
+    ///
+    /// 各 UTF-16 オフセットは `normalize_breakpoints`(`start_session` と同じ規則)で命令添字へ解決する。
+    /// 解決済みの `utf16Offset` は、同じ命令へ解決した要求のうち要求順で最初のオフセット。
+    /// 命令の無いオフセットは `unresolved` に昇順・重複なしで返す。
+    ///
+    /// 同じ要求の再送は同じ結果になる(冪等)。要求は状態を変える前にすべて検査し、
+    /// 拒否した要求(不明・破棄済みの `sessionId`、上限超過の `offsets`)は状態を変えない。
+    /// 再開フラグは `BreakpointSet` の操作だけで扱い、ここでは変更しない。
+    pub fn set_breakpoints(&self, req: SetBreakpointsRequest) -> Result<BreakpointsDto, ApiError> {
+        if req.offsets.len() > MAX_BREAKPOINT_OFFSETS {
+            return Err(invalid("offsets"));
+        }
+
+        let mut inner = self.lock()?;
+        let Inner {
+            program, session, ..
+        } = &mut *inner;
+        let slot = session_slot(session, req.session_id)?;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+
+        let normalized = normalize_breakpoints(&loaded.source_map, &req.offsets);
+        let dto = breakpoints_dto(&loaded.source_map, &normalized)?;
+        // 変更の前に添字の範囲を検査する(上流の `insert` の失敗で途中まで書き換えないため)。
+        let instruction_count = slot.session.breakpoints().instruction_count();
+        if normalized
+            .resolved
+            .iter()
+            .any(|&(index, _)| index >= instruction_count)
+        {
+            return Err(internal());
+        }
+        let breakpoints = slot.session.breakpoints_mut();
+        breakpoints.clear();
+        for &(index, _) in &normalized.resolved {
+            breakpoints.insert(index).map_err(|_| internal())?;
+        }
+        Ok(dto)
+    }
+
+    /// 実行中のバッチを一時停止する要求。`Mutex` を取らない。
+    ///
+    /// `req.session_id` が現在のセッション(`current_session_id`、0 は「なし」)と一致するときだけ
+    /// キャンセル旗を立てる。不明・古い・破棄済みの ID は何もせず、エラーも返さない
+    /// (遅れて届いた Pause が新しいセッションを止めないため)。旗は次の `run_batch` の入口で下ろされる。
+    pub fn pause(&self, req: PauseRequest) {
+        let current = self.current_session_id.load(Ordering::Acquire);
+        if current != 0 && req.session_id == current {
+            self.cancel.store(true, Ordering::Release);
+        }
     }
 }
 
