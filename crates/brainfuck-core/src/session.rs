@@ -12,7 +12,7 @@ use std::num::NonZeroU64;
 
 use crate::breakpoint::BreakpointSet;
 use crate::error::RuntimeError;
-use crate::machine::{Machine, MachineConfig, MachineSnapshot, StopReason};
+use crate::machine::{Machine, MachineConfig, MachineSnapshot, StepResult, StopReason};
 use crate::parser::Program;
 use crate::view::{tape_window_of, StateView, TapeWindow};
 
@@ -134,6 +134,37 @@ impl DebugSession {
     /// ブレークポイント集合を可変で参照する。実行の前後およびリセットの前後で編集できる。
     pub fn breakpoints_mut(&mut self) -> &mut BreakpointSet {
         &mut self.breakpoints
+    }
+
+    /// Step Into: 有効な命令をちょうど 1 個実行する(タスク 3.2)。
+    ///
+    /// ブレークポイントとキャンセルの指示は参照しない。core の `step()` を 1 回だけ呼ぶ。
+    /// - 停止済みなら機械を変えず `Ok(Halted)` を返し、直近の停止理由を `Halted` にする。
+    /// - 命令を実行したら再開フラグを真にする。実行後に停止状態に達したなら直近の停止理由を
+    ///   `Halted`、達しなければ消去する。
+    /// - 実行エラー(ポインタ範囲外・ステップ制限超過)は core のエラーをそのまま返す。
+    ///   機械は変えず、直近の停止理由を消去する。
+    pub fn step_into(&mut self) -> Result<StepResult, RuntimeError> {
+        match self.machine.step() {
+            Ok(StepResult::Executed) => {
+                self.skip_breakpoint_once = true;
+                self.last_stop = if self.machine.is_halted() {
+                    Some(StopReason::Halted)
+                } else {
+                    None
+                };
+                Ok(StepResult::Executed)
+            }
+            Ok(StepResult::Halted) => {
+                // 停止済みの経路。機械は変更されていない。
+                self.last_stop = Some(StopReason::Halted);
+                Ok(StepResult::Halted)
+            }
+            Err(error) => {
+                self.last_stop = None;
+                Err(error)
+            }
+        }
     }
 
     /// 機械を同じプログラム・入力・実行設定の初期状態へ戻す。

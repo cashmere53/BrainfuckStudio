@@ -245,3 +245,72 @@ fn state_view_window_start_and_offset_sum_to_the_pointer() {
     );
     assert_eq!(view.output, &[][..]);
 }
+
+/// `step_into` を `count` 回呼ぶ。各呼び出しが `Ok` で成功することを確認する。
+fn step_into_times(session: &mut brainfuck_core::DebugSession, count: usize) {
+    for _ in 0..count {
+        session.step_into().expect("有効な命令の実行は成功する");
+    }
+}
+
+#[test]
+fn step_into_output_of_non_utf8_byte_is_visible_in_state_view() {
+    // `-` でセル 0 が 255 になり、`.` が非 UTF-8 のバイト 0xFF を出力する。
+    let mut session = session_from("-.", &[], MachineConfig::unlimited());
+    step_into_times(&mut session, 2);
+
+    let view = session.state_view(DEFAULT_WINDOW_RADIUS);
+    assert_eq!(view.output, &[0xFF][..]);
+    assert_eq!(view.output, session.machine().output());
+}
+
+#[test]
+fn step_into_multiple_output_bytes_keep_their_order_in_state_view() {
+    // 128 個の `+` で 0x80 を出力し、さらに 127 個の `+` で 0xFF を出力する。
+    let source = format!("{}.{}.", "+".repeat(128), "+".repeat(127));
+    let mut session = session_from(&source, &[], MachineConfig::unlimited());
+
+    step_into_times(&mut session, 128 + 1);
+    assert_eq!(
+        session.state_view(DEFAULT_WINDOW_RADIUS).output,
+        &[0x80][..]
+    );
+
+    step_into_times(&mut session, 127 + 1);
+    let view = session.state_view(DEFAULT_WINDOW_RADIUS);
+    assert_eq!(view.output, &[0x80, 0xFF][..]);
+    assert_eq!(view.output, session.machine().output());
+}
+
+#[test]
+fn state_view_output_grows_with_each_output_instruction_stepped() {
+    // `+.+.+.` は 1, 2, 3 を順に出力する。各 `.` の直後に状態ビューへ反映されることを確認する。
+    let mut session = session_from("+.+.+.", &[], MachineConfig::unlimited());
+
+    step_into_times(&mut session, 1);
+    assert_eq!(session.state_view(DEFAULT_WINDOW_RADIUS).output, &[][..]);
+
+    step_into_times(&mut session, 1);
+    assert_eq!(session.state_view(DEFAULT_WINDOW_RADIUS).output, &[1][..]);
+
+    // 3 回目の `+` だけでは出力は増えない。
+    step_into_times(&mut session, 1);
+    assert_eq!(session.state_view(DEFAULT_WINDOW_RADIUS).output, &[1][..]);
+
+    step_into_times(&mut session, 1);
+    assert_eq!(
+        session.state_view(DEFAULT_WINDOW_RADIUS).output,
+        &[1, 2][..]
+    );
+
+    step_into_times(&mut session, 1);
+    assert_eq!(
+        session.state_view(DEFAULT_WINDOW_RADIUS).output,
+        &[1, 2][..]
+    );
+
+    step_into_times(&mut session, 1);
+    let view = session.state_view(DEFAULT_WINDOW_RADIUS);
+    assert_eq!(view.output, &[1, 2, 3][..]);
+    assert_eq!(view.output, session.machine().output());
+}

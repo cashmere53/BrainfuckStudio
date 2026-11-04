@@ -7,8 +7,8 @@
 mod debug_common;
 
 use brainfuck_core::{
-    BatchSize, DebugSession, Machine, MachineConfig, Program, DEFAULT_BATCH_SIZE,
-    DEFAULT_WINDOW_RADIUS,
+    BatchSize, DebugSession, Machine, MachineConfig, Program, RuntimeError, StepResult, StopReason,
+    DEFAULT_BATCH_SIZE, DEFAULT_WINDOW_RADIUS,
 };
 use debug_common::session_from;
 
@@ -121,4 +121,131 @@ fn breakpoints_can_be_edited_before_any_run() {
     assert_eq!(session.breakpoints_mut().insert(3), Ok(false));
     assert!(session.breakpoints_mut().insert(4).is_err());
     assert_eq!(session.breakpoints().iter().collect::<Vec<_>>(), vec![3]);
+}
+
+// ---- Step Into(タスク 3.2) ----
+
+#[test]
+fn step_into_executes_exactly_one_instruction_ignoring_breakpoints() {
+    let mut session = session_from("+>+", b"", MachineConfig::unlimited());
+    session.breakpoints_mut().insert(0).expect("0 は有効な添字");
+    let before = session.snapshot();
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+
+    let after = session.snapshot();
+    assert_eq!(after.steps_executed, before.steps_executed + 1);
+    assert_eq!(after.pc, before.pc + 1);
+    assert_eq!(after.data_pointer, before.data_pointer);
+    assert_eq!(before.current_cell, 0);
+    assert_eq!(after.current_cell, 1);
+    assert!(!after.halted);
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn step_into_effects_are_observable_per_instruction() {
+    let mut session = session_from(">+<", b"", MachineConfig::unlimited());
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+    let moved = session.snapshot();
+    assert_eq!(
+        (moved.pc, moved.data_pointer, moved.steps_executed),
+        (1, 1, 1)
+    );
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+    let incremented = session.snapshot();
+    assert_eq!((incremented.pc, incremented.current_cell), (2, 1));
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+    let back = session.snapshot();
+    assert_eq!((back.pc, back.data_pointer, back.current_cell), (3, 0, 0));
+    assert_eq!(back.steps_executed, 3);
+    assert!(back.halted);
+}
+
+#[test]
+fn step_into_reaching_the_end_reports_halted() {
+    let mut session = session_from("+", b"", MachineConfig::unlimited());
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+
+    assert!(session.snapshot().halted);
+    assert_eq!(session.last_stop(), Some(StopReason::Halted));
+}
+
+#[test]
+fn step_into_without_reaching_the_end_clears_last_stop() {
+    let mut session = session_from("+>", b"", MachineConfig::unlimited());
+
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+
+    assert!(!session.snapshot().halted);
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn step_into_on_halted_session_leaves_state_and_reports_halted() {
+    let mut session = session_from("+", b"", MachineConfig::unlimited());
+    session.step_into().expect("1 命令目で停止する");
+    let before = session.machine().clone();
+
+    assert_eq!(session.step_into(), Ok(StepResult::Halted));
+
+    assert_eq!(session.machine(), &before);
+    assert_eq!(session.last_stop(), Some(StopReason::Halted));
+}
+
+#[test]
+fn step_into_pointer_out_of_bounds_is_an_error_and_leaves_machine_unchanged() {
+    let mut session = session_from("+<", b"", MachineConfig::unlimited());
+    session.step_into().expect("+ は成功する");
+    let before = session.machine().clone();
+
+    let error = session.step_into().unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::PointerOutOfBounds { pc: 1, dp: 0, .. }
+    ));
+    assert_eq!(session.machine(), &before);
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn step_into_step_limit_exceeded_is_an_error_and_leaves_machine_unchanged() {
+    let mut session = session_from("+>+", b"", MachineConfig::with_max_steps(1));
+    session.step_into().expect("1 命令目は上限内");
+    let before = session.machine().clone();
+
+    let error = session.step_into().unwrap_err();
+
+    assert!(matches!(
+        error,
+        RuntimeError::StepLimitExceeded { limit: 1, .. }
+    ));
+    assert_eq!(session.machine(), &before);
+    assert_eq!(session.last_stop(), None);
+}
+
+#[test]
+fn reset_after_step_into_restores_creation_state_and_keeps_breakpoints() {
+    let source = "+>-";
+    let config = MachineConfig::unlimited();
+    let mut session = session_from(source, b"", config);
+    session.breakpoints_mut().insert(2).expect("2 は有効な添字");
+    let created = session_from(source, b"", config).machine().clone();
+    for _ in 0..3 {
+        session.step_into().expect("3 命令で停止する");
+    }
+    assert_eq!(session.last_stop(), Some(StopReason::Halted));
+
+    session.reset();
+
+    assert_eq!(session.machine(), &created);
+    assert_eq!(session.last_stop(), None);
+    assert!(session.breakpoints().contains(2));
+    assert_eq!(session.step_into(), Ok(StepResult::Executed));
+    assert_eq!(session.snapshot().pc, 1);
 }
