@@ -114,7 +114,7 @@
   - _Boundary: Test suite (differential)_
   - _Requirements: 1.8, 4.10, 11.4_
 
-- [ ] 4.3 (P) 回帰テストの規約と初期ケースを用意する
+- [x] 4.3 (P) 回帰テストの規約と初期ケースを用意する
   - 不具合ごとに「最小の `.bf` + 対応するテスト関数 + 事象を説明するコメント」を追加する規約を、`tests/debug_regression.rs` 冒頭のコメントに記す(core の回帰テストの規約を踏襲し、core の既存回帰ファイルは変更しない)
   - フィクスチャは `tests/regression/debug_*.bf`(`debug_` 接頭辞必須)と命名し、core の `tests/regression/` の既存ファイル・既存回帰テストと名前が衝突しないようにする。この命名規約も `tests/debug_regression.rs` 冒頭のコメントに記す
   - 初期ケースとして、バッチ境界ちょうどのブレークポイントを再現する最小プログラム(`tests/regression/debug_batch_boundary_breakpoint.bf`)をフィクスチャとして追加し、見逃さずに `Breakpoint` で停止するテストを置き、成功する
