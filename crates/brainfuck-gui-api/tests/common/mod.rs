@@ -9,7 +9,8 @@
 use brainfuck_core::{Machine, MachineConfig, Program, RuntimeError, StopReason};
 use brainfuck_gui_api::codec;
 use brainfuck_gui_api::dto::{
-    LoadSourceRequest, LoadSourceResult, StartSessionRequest, StepLimitDto, ViewRequestDto,
+    BatchResultDto, BatchStopDto, LoadSourceRequest, LoadSourceResult, RunBatchRequest,
+    StartSessionRequest, StepLimitDto, ViewRequestDto,
 };
 use brainfuck_gui_api::service::DebuggerService;
 
@@ -60,6 +61,48 @@ pub fn start_request(
     }
 }
 
+/// `run_batch` を `batchReached` の間反復した結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchRun {
+    /// 最後の応答(停止理由と停止時点の状態)。
+    pub last: BatchResultDto,
+    /// 反復で実行した命令数の総和。
+    pub executed_total: usize,
+    /// `run_batch` の呼び出し回数。
+    pub calls: usize,
+}
+
+/// `run_batch` を `batchReached` の間反復し、それ以外の停止理由で止める。
+///
+/// `max_calls` 回を超えても止まらない場合は panic する(反復が終わらない不具合の検出)。
+/// バッチ幅 `batch_size` は `None`(既定)または指定値をそのまま要求に使う。
+pub fn run_until_stop(
+    service: &DebuggerService,
+    session_id: u64,
+    batch_size: Option<u64>,
+    max_calls: usize,
+) -> BatchRun {
+    let mut executed_total = 0;
+    for calls in 1..=max_calls {
+        let result = service
+            .run_batch(RunBatchRequest {
+                session_id,
+                batch_size,
+                view: view(16, 0),
+            })
+            .expect("run_batch accepts the request");
+        executed_total += result.executed;
+        if result.stop != BatchStopDto::BatchReached {
+            return BatchRun {
+                last: result,
+                executed_total,
+                calls,
+            };
+        }
+    }
+    panic!("run_batch kept reaching the batch width after {max_calls} calls");
+}
+
 /// コア基準の実行結果(比較の正解)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreOutcome {
@@ -71,6 +114,8 @@ pub struct CoreOutcome {
     pub dp: usize,
     /// 実行した命令数。
     pub steps: u64,
+    /// テープ(機械が確保した範囲)。
+    pub tape: Vec<u8>,
     /// 完走の結果(正常終了、または実行エラー)。
     pub result: Result<StopReason, RuntimeError>,
 }
@@ -92,6 +137,7 @@ pub fn run_core(source: &str, input: &[u8], max_steps: Option<u64>) -> CoreOutco
         pc: snapshot.pc,
         dp: snapshot.data_pointer,
         steps: snapshot.steps_executed,
+        tape: machine.tape().to_vec(),
         result,
     }
 }

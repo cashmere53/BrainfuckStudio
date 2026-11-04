@@ -8,19 +8,22 @@
 //! 書き込みは `Mutex` を保持したまま行う。`pause` は後続タスクでこの値だけを読む。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use brainfuck_core::{DebugSession, MachineConfig, Program, SourceMap};
+use brainfuck_core::{BatchSize, DebugSession, MachineConfig, Program, SourceMap};
 
 use crate::codec::{self, CodecError};
 use crate::convert;
 use crate::dto::{
-    ApiError, ApiErrorKind, BreakpointDto, BreakpointsDto, LoadSourceRequest, LoadSourceResult,
-    SessionStartedDto, SessionStateDto, StartSessionRequest, StepLimitDto, ViewRequestDto,
+    ApiError, ApiErrorKind, BatchResultDto, BreakpointDto, BreakpointsDto, LoadSourceRequest,
+    LoadSourceResult, RunBatchRequest, SessionStartedDto, SessionStateDto, SessionViewRequest,
+    StartSessionRequest, StepLimitDto, StepResultDto, TapeWindowDto, TapeWindowRequest,
+    ViewRequestDto,
 };
 use crate::limits::{
-    MAX_BREAKPOINT_OFFSETS, MAX_INPUT_BYTES, MAX_SOURCE_BYTES, MAX_STEP_LIMIT, MAX_TAPE_RADIUS,
+    MAX_BATCH_SIZE, MAX_BREAKPOINT_OFFSETS, MAX_INPUT_BYTES, MAX_SOURCE_BYTES, MAX_STEP_LIMIT,
+    MAX_TAPE_RADIUS,
 };
 
 /// 読み込み済みのプログラム。解析結果と位置変換表を持つ(ソース文字列は保持しない)。
@@ -59,6 +62,8 @@ pub struct DebuggerService {
     inner: Mutex<Inner>,
     /// 現在のセッション ID(0 = なし)。`Mutex` の外から照合するための写し。
     current_session_id: AtomicU64,
+    /// キャンセル旗。`run_batch` は入口で偽に戻し、バッチ中は `CancelSignal` として読む。
+    cancel: Arc<AtomicBool>,
 }
 
 impl Default for DebuggerService {
@@ -73,6 +78,7 @@ impl DebuggerService {
         Self {
             inner: Mutex::new(Inner::default()),
             current_session_id: AtomicU64::new(0),
+            cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -150,18 +156,123 @@ impl DebuggerService {
         }
 
         let id = inner.allocate_id()?;
-        inner.session = Some(SessionSlot {
+        let Inner {
+            program,
+            session: current,
+            ..
+        } = &mut *inner;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+        let slot = SessionSlot {
             id,
             session,
             input_total,
-        });
+        };
+        // 初期状態は新しいセッションから組み立ててから置き換える。組み立てに失敗したら既存のセッションを残す。
+        let state = state_of(&loaded.source_map, &slot, &req.view)?;
+        *current = Some(slot);
         self.current_session_id.store(id, Ordering::Release);
-
-        // 初期状態は同じロック内で、保存したセッションから組み立てる。
-        let loaded = inner.program.as_ref().ok_or_else(internal)?;
-        let slot = inner.session.as_ref().ok_or_else(internal)?;
-        let state = state_of(&loaded.source_map, slot, &req.view)?;
         Ok(SessionStartedDto { state, breakpoints })
+    }
+
+    /// バッチを 1 回実行する。`batchSize` は省略で既定の 1,000、指定時は 1..=1,000,000。
+    ///
+    /// 要求の検査の後、キャンセル旗を偽に戻してからバッチを実行する(前回の Pause の残りで
+    /// 次の Run が即中断しないため)。`Mutex` は 1 バッチの間保持する。
+    pub fn run_batch(&self, req: RunBatchRequest) -> Result<BatchResultDto, ApiError> {
+        let size = batch_size(req.batch_size)?;
+        check_view(&req.view)?;
+
+        let mut inner = self.lock()?;
+        let Inner {
+            program, session, ..
+        } = &mut *inner;
+        let slot = session_slot(session, req.session_id)?;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+
+        self.cancel.store(false, Ordering::Release);
+        let report = slot.session.run_batch(size, &*self.cancel);
+        let state = state_of(&loaded.source_map, slot, &req.view)?;
+        convert::batch_result_dto(report.executed, report.stop, state)
+    }
+
+    /// 1 命令だけ実行する(Step Into)。ブレークポイントは参照しない。
+    pub fn step(&self, req: SessionViewRequest) -> Result<StepResultDto, ApiError> {
+        check_view(&req.view)?;
+
+        let mut inner = self.lock()?;
+        let Inner {
+            program, session, ..
+        } = &mut *inner;
+        let slot = session_slot(session, req.session_id)?;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+
+        let outcome = convert::step_outcome_dto(slot.session.step_into())?;
+        let state = state_of(&loaded.source_map, slot, &req.view)?;
+        Ok(StepResultDto { outcome, state })
+    }
+
+    /// 機械を初期状態へ戻す(ブレークポイントは保持する)。出力は空になる。
+    pub fn reset(&self, req: SessionViewRequest) -> Result<SessionStateDto, ApiError> {
+        check_view(&req.view)?;
+
+        let mut inner = self.lock()?;
+        let Inner {
+            program, session, ..
+        } = &mut *inner;
+        let slot = session_slot(session, req.session_id)?;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+
+        slot.session.reset();
+        state_of(&loaded.source_map, slot, &req.view)
+    }
+
+    /// 現在の状態を返す。機械は変えない。
+    pub fn get_snapshot(&self, req: SessionViewRequest) -> Result<SessionStateDto, ApiError> {
+        check_view(&req.view)?;
+
+        let mut inner = self.lock()?;
+        let Inner {
+            program, session, ..
+        } = &mut *inner;
+        let slot = session_slot(session, req.session_id)?;
+        let loaded = program.as_ref().ok_or_else(internal)?;
+
+        state_of(&loaded.source_map, slot, &req.view)
+    }
+
+    /// テープの表示窓を返す。半径は 0..=64。
+    pub fn get_tape_window(&self, req: TapeWindowRequest) -> Result<TapeWindowDto, ApiError> {
+        if req.radius > MAX_TAPE_RADIUS {
+            return Err(invalid("radius"));
+        }
+
+        let mut inner = self.lock()?;
+        let slot = session_slot(&mut inner.session, req.session_id)?;
+        Ok(convert::tape_window_dto(
+            &slot.session.tape_window(req.radius),
+        ))
+    }
+}
+
+/// 現在のセッションを ID で引く。未開始・破棄済み・別 ID は `sessionNotFound`。
+fn session_slot(
+    session: &mut Option<SessionSlot>,
+    session_id: u64,
+) -> Result<&mut SessionSlot, ApiError> {
+    match session {
+        Some(slot) if slot.id == session_id => Ok(slot),
+        _ => Err(ApiError::new(ApiErrorKind::SessionNotFound, None)),
+    }
+}
+
+/// バッチ幅の指定を検査する。省略は既定の 1,000、指定時は 1..=1,000,000。
+fn batch_size(requested: Option<u64>) -> Result<BatchSize, ApiError> {
+    match requested {
+        None => Ok(BatchSize::DEFAULT),
+        Some(n) if (1..=MAX_BATCH_SIZE).contains(&n) => {
+            BatchSize::new(n).ok_or_else(|| invalid("batchSize"))
+        }
+        Some(_) => Err(invalid("batchSize")),
     }
 }
 
@@ -319,6 +430,8 @@ mod tests {
 
     use brainfuck_core::RuntimeError;
 
+    use crate::dto::BatchStopDto;
+
     fn load(service: &DebuggerService, source: &str) -> u64 {
         match service
             .load_source(LoadSourceRequest {
@@ -455,6 +568,29 @@ mod tests {
     }
 
     #[test]
+    fn run_batch_clears_a_cancel_flag_left_over_before_it_entered() {
+        let service = DebuggerService::new();
+        let program = load(&service, "+.");
+        let session = start(&service, program, b"", StepLimitDto::Unlimited, vec![]);
+        // 前回の Pause の残り(旗が立ったまま)で次の Run が即中断しないこと。
+        service.cancel.store(true, Ordering::Release);
+
+        let result = service
+            .run_batch(RunBatchRequest {
+                session_id: session.state.session_id,
+                batch_size: None,
+                view: ViewRequestDto {
+                    tape_radius: 16,
+                    output_from: 0,
+                },
+            })
+            .expect("run_batch accepts the request");
+        assert_eq!(result.stop, BatchStopDto::Halted);
+        assert_eq!(result.executed, 2);
+        assert!(!service.cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn input_instruction_stores_the_first_input_byte_and_advances_the_position() {
         let service = DebuggerService::new();
         let program = load(&service, ",");
@@ -467,5 +603,69 @@ mod tests {
             .expect("the input instruction runs");
         assert_eq!(slot.session.machine().tape()[0], 0x41);
         assert_eq!(slot.session.machine().input_position(), 1);
+    }
+
+    fn start_request_for(program_id: u64, limit: StepLimitDto) -> StartSessionRequest {
+        StartSessionRequest {
+            program_id,
+            input_base64: codec::encode(b""),
+            limit,
+            breakpoint_offsets: vec![],
+            view: ViewRequestDto {
+                tape_radius: 16,
+                output_from: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn rejected_or_stale_start_keeps_the_live_session_id_and_state() {
+        let service = DebuggerService::new();
+        let program = load(&service, "+++");
+        let live = start(&service, program, b"", StepLimitDto::Unlimited, vec![])
+            .state
+            .session_id;
+        let view = || ViewRequestDto {
+            tape_radius: 16,
+            output_from: 0,
+        };
+        service
+            .step(SessionViewRequest {
+                session_id: live,
+                view: view(),
+            })
+            .expect("the live session steps once");
+
+        // ロック前の拒否(tapeRadius・maxSteps)とロック後の拒否(古い programId)。
+        let mut too_wide = start_request_for(program, StepLimitDto::Unlimited);
+        too_wide.view.tape_radius = 65;
+        let no_steps = start_request_for(program, StepLimitDto::Limited { max_steps: 0 });
+        let stale = start_request_for(program + 1_000, StepLimitDto::Unlimited);
+        for request in [too_wide, no_steps, stale] {
+            service
+                .start_session(request)
+                .expect_err("the request is rejected");
+            assert_eq!(service.current_session_id.load(Ordering::Acquire), live);
+            let state = service
+                .get_snapshot(SessionViewRequest {
+                    session_id: live,
+                    view: view(),
+                })
+                .expect("the live session still answers under its own id");
+            assert_eq!(state.session_id, live);
+            assert_eq!(state.snapshot.steps_executed, 1);
+            assert_eq!(state.snapshot.pc, 1);
+        }
+
+        let finished = service
+            .run_batch(RunBatchRequest {
+                session_id: live,
+                batch_size: None,
+                view: view(),
+            })
+            .expect("run_batch continues the live session");
+        assert_eq!(finished.stop, BatchStopDto::Halted);
+        assert_eq!(finished.state.session_id, live);
+        assert_eq!(finished.state.snapshot.steps_executed, 3);
     }
 }
