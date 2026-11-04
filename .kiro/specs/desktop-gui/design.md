@@ -508,7 +508,7 @@ type SaveFileResult = { kind: "saved"; fileName: string } | { kind: "cancelled" 
 type SetDocumentDirtyRequest = { dirty: boolean };
 ```
 - Preconditions: 要求の値は `limits` の範囲内(範囲外は `invalidArgument` / `sourceTooLarge` / `inputTooLarge`)
-- Postconditions: `OutputChunkDto` は `dataStart = max(min(outputFrom, totalLen), totalLen − 65,536)`(`outputFrom > totalLen` のときは `dataStart = max(0, totalLen − 65,536)`)から末尾までを返す。`SessionStateDto.currentRange` は `SourceMap::range_of(snapshot.pc)`
+- Postconditions: `OutputChunkDto` は `outputFrom ≤ totalLen` のとき `dataStart = max(outputFrom, totalLen − 65,536)`、`outputFrom > totalLen`(リセット・縮小後の古い位置)のとき `dataStart = max(0, totalLen − 65,536)`(この規則が唯一の定義。フロントの `outputFrom` は保持済み末尾 `buf.end` で、`start_session` / `reset` では 0 を送る)から末尾までを返す。`SessionStateDto.currentRange` は `SourceMap::range_of(snapshot.pc)`
 - Invariants: すべての DTO は `serde_json` で往復可能。`kind` 値は変更しない(Revalidation Trigger)
 
 `limits`: `MAX_SOURCE_BYTES = 1_048_576`、`MAX_INPUT_BYTES = 1_048_576`、`MAX_BATCH_SIZE = 1_000_000`、`DEFAULT_BATCH_SIZE = 1_000`(debugger-state の定数)、`MAX_TAPE_RADIUS = 64`、`DEFAULT_TAPE_RADIUS = 16`、`OUTPUT_TAIL_LIMIT = 65_536`、`MAX_STEP_LIMIT = 9_007_199_254_740_991`、`DEFAULT_MAX_STEPS = 10_000_000`、`MAX_BREAKPOINT_OFFSETS = 100_000`。`codec` は Base64 のデコード前に長さから上限を検査し、巨大な確保をしない。
@@ -531,11 +531,11 @@ type SetDocumentDirtyRequest = { dirty: boolean };
 pub fn source_position_dto(p: &SourcePosition) -> SourcePositionDto;
 pub fn source_range_dto(r: &SourceRange) -> SourceRangeDto;
 pub fn parse_error_dto(source: &str, e: &ParseError) -> Result<ParseErrorDto, ApiError>;   // 位置は SourceMap::position_at
-pub fn runtime_error_dto(e: &RuntimeError) -> RuntimeErrorDto;
+pub fn runtime_error_dto(e: &RuntimeError) -> Result<RuntimeErrorDto, ApiError>; // 未知の種類(non_exhaustive)は internal。stop_reason_dto / batch_stop_dto / step_outcome_dto / session_state_dto / batch_result_dto も Result を返す
 pub fn tape_window_dto(w: &TapeWindow<'_>) -> TapeWindowDto;                               // tape_window_of / DebugSession::tape_window の結果
 pub fn output_chunk(output: &[u8], output_from: usize) -> OutputChunkDto;                  // 末尾 65,536 バイトの規則を含む
 ```
-- Postconditions: `output_chunk` は `dataStart = max(min(output_from, total), total − 65,536)` から末尾までを Base64 で返す。位置の DTO は上流 `SourcePosition` の 4 フィールドをそのまま写す(値の再計算なし)
+- Postconditions: `output_chunk` は `output_from ≤ total` のとき `max(output_from, total − 65,536)`、`output_from > total` のとき `max(0, total − 65,536)` を `dataStart` として末尾までを Base64 で返す。位置の DTO は上流 `SourcePosition` の 4 フィールドをそのまま写す(値の再計算なし)
 - 一貫性(`position_at` と `range_of` / `program.source_offset(i)` の一致、UTF-16 逆引きの意味)は `debugger-state` 要件 9.14〜9.16 のテストが保証する。本 spec のテストは DTO への写像(フィールドの取り違えがないこと)のみを確認する
 
 #### DebuggerService
