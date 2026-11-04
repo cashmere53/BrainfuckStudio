@@ -4,14 +4,14 @@
 //! 操作は [`Op::static_reach`] の範囲条件を評価して満たさなければ縮退 → 適用」。縮退を返すときは
 //! 実行状態を一切変更しない。コストと到達範囲の式は `ir` の公開ヘルパにのみ置き、ここには持たない。
 //!
-//! 3.2 の時点では、クリア・乗算・走査(`Clear` / `Transfer` / `Scan`)は仮に常に縮退を返す。
-//! 3.3・3.4 がそれぞれの分岐で置き換える。
+//! クリアと移動/加算/乗算(`Clear` / `Transfer`)は 3.3 で一括適用を実装した。走査(`Scan`)は
+//! 3.2 の時点の仮の縮退のまま、3.4 がその分岐を置き換える。
 //!
 //! 呼び出し元は 3.6 で揃うため、それまで未使用警告を許可する(3.6 で除去する)。
 
 #![allow(dead_code)]
 
-use crate::ir::{Op, OpKind};
+use crate::ir::{Op, OpKind, Term};
 use crate::state::ExecState;
 use brainfuck_core::TAPE_SIZE;
 
@@ -85,8 +85,32 @@ pub(crate) fn execute(op: &Op, st: &mut ExecState, remaining: u64) -> FastOutcom
                 st.ir_pc + 1
             }
         }
-        // 3.3・3.4 で一括適用を実装するまでは仮に縮退する。
-        OpKind::Clear { .. } | OpKind::Transfer { .. } | OpKind::Scan { .. } => {
+        OpKind::Clear { .. } => {
+            st.replay.tape[dp] = 0;
+            st.ir_pc + 1
+        }
+        OpKind::Transfer { terms, .. } => {
+            // 開始セル 0 では本体は実行されないため、到達範囲は評価せず何もしない。
+            if cell != 0 {
+                let fits = op
+                    .static_reach()
+                    .is_some_and(|reach| reach_within_tape(dp, reach));
+                let all_targets_in_tape = terms.iter().all(|t| term_target(dp, t).is_some());
+                if !fits || !all_targets_in_tape {
+                    return FastOutcome::Fallback;
+                }
+                for term in terms.iter() {
+                    if let Some(target) = term_target(dp, term) {
+                        let slot = &mut st.replay.tape[target];
+                        *slot = slot.wrapping_add(term.factor.wrapping_mul(cell));
+                    }
+                }
+                st.replay.tape[dp] = 0;
+            }
+            st.ir_pc + 1
+        }
+        // 3.4 で一括適用を実装するまでは仮に縮退する。
+        OpKind::Scan { .. } => {
             return FastOutcome::Fallback;
         }
     };
@@ -95,6 +119,12 @@ pub(crate) fn execute(op: &Op, st: &mut ExecState, remaining: u64) -> FastOutcom
     st.ir_ops_executed = st.ir_ops_executed.saturating_add(1);
     st.ir_pc = next_pc;
     FastOutcome::Applied
+}
+
+/// 移動/加算/乗算の項 `term` の書き込み先(`dp` からの相対位置)。テープ外なら `None`。
+fn term_target(dp: usize, term: &Term) -> Option<usize> {
+    dp.checked_add_signed(term.offset)
+        .filter(|&target| target < TAPE_SIZE)
 }
 
 /// 現在位置 `dp` からの相対到達範囲 `reach`(`Op::static_reach` の値)がすべてテープ内に収まるか。
@@ -127,13 +157,18 @@ mod tests {
         st
     }
 
-    fn transfer(body_len: usize, reach_min: isize, reach_max: isize) -> OpKind {
+    /// `(offset, factor)` の組から `Transfer` を組み立てる。
+    fn transfer(
+        terms: &[(isize, u8)],
+        body_len: usize,
+        reach_min: isize,
+        reach_max: isize,
+    ) -> OpKind {
         OpKind::Transfer {
-            terms: vec![Term {
-                offset: 1,
-                factor: 1,
-            }]
-            .into_boxed_slice(),
+            terms: terms
+                .iter()
+                .map(|&(offset, factor)| Term { offset, factor })
+                .collect(),
             body_len,
             reach_min,
             reach_max,
@@ -359,23 +394,164 @@ mod tests {
     }
 
     #[test]
-    fn clear_transfer_and_scan_fall_back_until_their_tasks_land() {
-        let kinds = [
-            OpKind::Clear { increments: false },
-            OpKind::Clear { increments: true },
-            transfer(3, 0, 1),
-            OpKind::Scan { stride: 1 },
-        ];
-        for kind in kinds {
-            let mut st = state_at(0, 4);
-            let before = st.clone();
+    fn clear_zeroes_the_cell_and_costs_its_closed_form() {
+        for v in VALUES {
+            let v64 = u64::from(v);
+            let mut up = state_at(4, v);
+            up.ir_pc = 1;
             assert_eq!(
-                execute(&op(kind.clone(), 3), &mut st, u64::MAX),
-                FastOutcome::Fallback,
-                "{kind:?}"
+                execute(
+                    &op(OpKind::Clear { increments: false }, 3),
+                    &mut up,
+                    u64::MAX
+                ),
+                FastOutcome::Applied,
+                "[-] v={v}"
             );
-            assert_eq!(st, before, "{kind:?}");
+            assert_eq!(up.replay.tape[4], 0, "[-] v={v}");
+            let expected_up = if v == 0 { 1 } else { 1 + 2 * v64 };
+            assert_eq!(up.replay.steps_executed, expected_up, "[-] v={v}");
+            assert_eq!(up.ir_ops_executed, 1);
+            assert_eq!(up.ir_pc, 2);
+
+            let mut down = state_at(4, v);
+            assert_eq!(
+                execute(
+                    &op(OpKind::Clear { increments: true }, 3),
+                    &mut down,
+                    u64::MAX
+                ),
+                FastOutcome::Applied,
+                "[+] v={v}"
+            );
+            assert_eq!(down.replay.tape[4], 0, "[+] v={v}");
+            let expected_down = if v == 0 { 1 } else { 1 + 2 * (256 - v64) };
+            assert_eq!(down.replay.steps_executed, expected_down, "[+] v={v}");
         }
+    }
+
+    #[test]
+    fn clear_above_the_remaining_budget_falls_back_without_changing_state() {
+        // [-] の換算は 1 + 2 * 100 = 201
+        let mut st = state_at(0, 100);
+        let before = st.clone();
+        assert_eq!(
+            execute(&op(OpKind::Clear { increments: false }, 3), &mut st, 200),
+            FastOutcome::Fallback
+        );
+        assert_eq!(st, before);
+        assert_eq!(
+            execute(&op(OpKind::Clear { increments: false }, 3), &mut st, 201),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.tape[0], 0);
+    }
+
+    #[test]
+    fn transfer_with_a_zero_start_cell_is_a_no_op_costing_one_even_when_out_of_reach() {
+        // 本体は -5 まで到達しうるが、開始セル 0 では本体を実行しないので範囲を評価しない。
+        let mut st = state_at(0, 0);
+        st.ir_pc = 3;
+        assert_eq!(
+            execute(&op(transfer(&[(-5, 1)], 8, -5, 1), 10), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.tape[0], 0);
+        assert_eq!(st.replay.steps_executed, 1);
+        assert_eq!(st.ir_ops_executed, 1);
+        assert_eq!(st.ir_pc, 4);
+    }
+
+    #[test]
+    fn transfer_adds_scaled_values_and_clears_the_start_cell() {
+        // [->>+++<<] 相当: v = 5, 項 (+2, 係数 3), 本体 8 命令。換算 1 + 5 * (8 + 1) = 46
+        let mut st = state_at(10, 5);
+        assert_eq!(
+            execute(&op(transfer(&[(2, 3)], 8, 0, 2), 8), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.tape[10], 0);
+        assert_eq!(st.replay.tape[12], 15);
+        assert_eq!(st.replay.steps_executed, 46);
+        assert_eq!(st.ir_ops_executed, 1);
+        assert_eq!(st.ir_pc, 1);
+    }
+
+    #[test]
+    fn transfer_multiplies_with_wrapping_mod_256() {
+        // v = 255: 係数 3 → 765 mod 256 = 253、係数 2 → 510 mod 256 = 254。
+        // 開始セル 10 に 254 を足すと 264 mod 256 = 8 になる。
+        let mut st = state_at(5, 255);
+        st.replay.tape[4] = 10;
+        assert_eq!(
+            execute(
+                &op(transfer(&[(-1, 2), (1, 3)], 4, -1, 1), 4),
+                &mut st,
+                u64::MAX
+            ),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.tape[4], 8);
+        assert_eq!(st.replay.tape[6], 253);
+        assert_eq!(st.replay.tape[5], 0);
+    }
+
+    #[test]
+    fn transfer_reaching_the_last_cell_exactly_is_applied() {
+        let last = TAPE_SIZE - 1;
+        let mut st = state_at(last - 2, 1);
+        assert_eq!(
+            execute(&op(transfer(&[(2, 1)], 3, 0, 2), 3), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.tape[last], 1);
+    }
+
+    #[test]
+    fn transfer_whose_reach_leaves_the_tape_falls_back_for_a_nonzero_start_cell() {
+        let mut left = state_at(0, 3);
+        let before = left.clone();
+        assert_eq!(
+            execute(&op(transfer(&[(-1, 1)], 4, -1, 0), 4), &mut left, u64::MAX),
+            FastOutcome::Fallback
+        );
+        assert_eq!(left, before);
+
+        let last = TAPE_SIZE - 1;
+        let mut right = state_at(last, 3);
+        let before = right.clone();
+        assert_eq!(
+            execute(&op(transfer(&[(1, 1)], 4, 0, 1), 4), &mut right, u64::MAX),
+            FastOutcome::Fallback
+        );
+        assert_eq!(right, before);
+    }
+
+    #[test]
+    fn transfer_cost_above_the_remaining_budget_falls_back_without_changing_state() {
+        // 換算は 1 + 5 * 9 = 46
+        let mut st = state_at(10, 5);
+        let before = st.clone();
+        assert_eq!(
+            execute(&op(transfer(&[(2, 3)], 8, 0, 2), 8), &mut st, 45),
+            FastOutcome::Fallback
+        );
+        assert_eq!(st, before);
+        assert_eq!(
+            execute(&op(transfer(&[(2, 3)], 8, 0, 2), 8), &mut st, 46),
+            FastOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn scan_falls_back_until_task_3_4_lands() {
+        let mut st = state_at(0, 4);
+        let before = st.clone();
+        assert_eq!(
+            execute(&op(OpKind::Scan { stride: 1 }, 1), &mut st, u64::MAX),
+            FastOutcome::Fallback
+        );
+        assert_eq!(st, before);
     }
 
     #[test]
@@ -387,6 +563,9 @@ mod tests {
             op(OpKind::Input, 1),
             op(OpKind::LoopStart { end: 1 }, 1),
             op(OpKind::LoopEnd { start: 0 }, 1),
+            op(OpKind::Clear { increments: false }, 3),
+            op(OpKind::Clear { increments: true }, 3),
+            op(transfer(&[(1, 1)], 3, 0, 1), 3),
         ];
         for operation in &operations {
             for v in VALUES {
