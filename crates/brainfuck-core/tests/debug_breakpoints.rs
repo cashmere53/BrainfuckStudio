@@ -7,7 +7,7 @@ mod debug_common;
 
 use brainfuck_core::{
     BatchSize, BreakpointError, BreakpointSet, CancelFn, DebugSession, Machine, MachineConfig,
-    NeverCancel, RuntimeError, StopReason,
+    NeverCancel, Program, RuntimeError, SourceMap, StopReason,
 };
 use debug_common::{machine_from, session_from};
 use std::error::Error;
@@ -511,4 +511,266 @@ fn error_at_breakpoint_pc_keeps_resume_flag_and_repeats_the_same_error() {
     ));
     assert_eq!(second.executed, 0);
     assert_eq!(session.machine(), &before);
+}
+
+// ---------------------------------------------------------------------------
+// タスク 4.4: ソース位置からのブレークポイント正規化の合成テスト
+// ---------------------------------------------------------------------------
+
+/// ソースから、プログラムを所有するセッションと同じソースの位置変換表を作る(検証用の局所ヘルパ)。
+fn session_and_map(source: &str) -> (DebugSession, SourceMap) {
+    let program = Program::parse(source).expect("テスト用ソースは解析に成功する必要がある");
+    let map =
+        SourceMap::new(&program, source).expect("テスト用ソースは位置変換表を作れる必要がある");
+    let session = DebugSession::new(program, Vec::new(), MachineConfig::unlimited());
+    (session, map)
+}
+
+/// バイトオフセットを正規化して設定する(検証用の局所ヘルパ)。
+///
+/// 呼び出し側の合成そのもの: `instruction_at_or_after_offset` が `Some` のときだけ `insert` する。
+fn set_breakpoint_at_offset(
+    session: &mut DebugSession,
+    map: &SourceMap,
+    byte_offset: usize,
+) -> Option<usize> {
+    let index = map.instruction_at_or_after_offset(byte_offset)?;
+    session
+        .breakpoints_mut()
+        .insert(index)
+        .expect("正規化された添字は命令数の範囲内");
+    Some(index)
+}
+
+/// UTF-16 オフセットを正規化して設定する(検証用の局所ヘルパ)。
+///
+/// 呼び出し側の合成そのもの: `instruction_at_or_after_utf16` が `Some` のときだけ `insert` する。
+fn set_breakpoint_at_utf16(
+    session: &mut DebugSession,
+    map: &SourceMap,
+    utf16_offset: usize,
+) -> Option<usize> {
+    let index = map.instruction_at_or_after_utf16(utf16_offset)?;
+    session
+        .breakpoints_mut()
+        .insert(index)
+        .expect("正規化された添字は命令数の範囲内");
+    Some(index)
+}
+
+/// 1 始まりの行を正規化して設定する(検証用の局所ヘルパ)。
+///
+/// 呼び出し側の合成そのもの: `first_instruction_on_line` が `Some` のときだけ `insert` する。
+fn set_breakpoint_on_line(
+    session: &mut DebugSession,
+    map: &SourceMap,
+    line: usize,
+) -> Option<usize> {
+    let index = map.first_instruction_on_line(line)?;
+    session
+        .breakpoints_mut()
+        .insert(index)
+        .expect("正規化された添字は命令数の範囲内");
+    Some(index)
+}
+
+#[test]
+fn comment_byte_offsets_normalize_to_the_next_instruction_index() {
+    // "+xy-": 添字 0 は '+'(バイト 0)、添字 1 は '-'(バイト 3)。x・y はコメント。
+    let (mut session, map) = session_and_map("+xy-");
+
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 0), Some(0));
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 1), Some(1));
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 2), Some(1));
+    assert_eq!(indices(session.breakpoints()), vec![0, 1]);
+}
+
+#[test]
+fn line_without_instruction_normalizes_to_the_following_lines_instruction() {
+    // 行 1 "+"、行 2 "abc"(命令なし)、行 3 は空、行 4 "-"。
+    let (mut session, map) = session_and_map("+\nabc\n\n-");
+
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 1), Some(0));
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 2), Some(1));
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 3), Some(1));
+    assert_eq!(indices(session.breakpoints()), vec![0, 1]);
+}
+
+#[test]
+fn line_breakpoint_stops_right_before_the_normalized_instruction() {
+    // 行 2 は命令のない行なので、後続行の '-'(添字 1)へ正規化される。
+    let (mut session, map) = session_and_map("+\nabc\n-");
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 2), Some(1));
+
+    let report = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(report.stop, Ok(StopReason::Breakpoint));
+    assert_eq!(report.executed, 1);
+    assert_eq!(session.snapshot().pc, 1);
+    assert_eq!(session.snapshot().current_cell, 1);
+}
+
+#[test]
+fn comment_offset_breakpoint_stops_right_before_the_next_instruction_when_run() {
+    // "+\nxy\n-": 添字 0 は '+'(バイト 0)、添字 1 は '-'(バイト 5)。x・y はコメント。
+    let (mut session, map) = session_and_map("+\nxy\n-");
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 2), Some(1));
+
+    // '+' だけが実行され、'-' の直前(添字 1)で止まる。
+    let report = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(report.stop, Ok(StopReason::Breakpoint));
+    assert_eq!(report.executed, 1);
+    assert_eq!(session.snapshot().pc, 1);
+    assert_eq!(session.snapshot().current_cell, 1);
+    assert_eq!(session.snapshot().steps_executed, 1);
+
+    // 再開すると停止位置の '-' が実行され、正常終了する。
+    let resumed = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(resumed.stop, Ok(StopReason::Halted));
+    assert_eq!(resumed.executed, 1);
+    assert_eq!(session.snapshot().current_cell, 0);
+}
+
+#[test]
+fn normalized_offset_without_following_instruction_is_not_set_and_set_is_unchanged() {
+    // "+abc": 添字 0 のみが命令。末尾のコメントには後続の命令がない。
+    let (mut session, map) = session_and_map("+abc");
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 0), Some(0));
+    let before = session.breakpoints().clone();
+
+    // 'a' 上(後続命令なし)、ソース末尾、ソース長を超える位置。
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 1), None);
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 4), None);
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 100), None);
+    assert_eq!(session.breakpoints(), &before);
+}
+
+#[test]
+fn line_past_the_last_instruction_is_not_set_and_set_is_unchanged() {
+    // 行 1 "+"、行 2 "abc"(後続命令なし)。行数を超える行 3 も対象外。
+    let (mut session, map) = session_and_map("+\nabc");
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 1), Some(0));
+    let before = session.breakpoints().clone();
+
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 2), None);
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 3), None);
+    assert_eq!(session.breakpoints(), &before);
+}
+
+#[test]
+fn source_without_instructions_never_sets_a_breakpoint() {
+    // 命令が 0 個のソースでは、どの正規化も設定せず集合は空のままになる。
+    let (mut session, map) = session_and_map("abc");
+    assert_eq!(map.instruction_count(), 0);
+
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 0), None);
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 1), None);
+    assert!(session.breakpoints().is_empty());
+}
+
+#[test]
+fn normalized_index_is_stored_as_instruction_index_and_matches_by_index_only() {
+    // "+\nxy\n-": 添字 0 は '+'、添字 1 は '-'。コメント位置 'x' から正規化した添字 1 だけが停止条件になる。
+    let (mut session, map) = session_and_map("+\nxy\n-");
+    assert_eq!(set_breakpoint_at_offset(&mut session, &map, 2), Some(1));
+    assert_eq!(indices(session.breakpoints()), vec![1]);
+
+    // 停止は pc と添字の一致だけで決まり、停止後の再開で前進する。
+    let stopped = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(stopped.stop, Ok(StopReason::Breakpoint));
+    assert_eq!(session.snapshot().pc, 1);
+    assert_eq!(session.run_batch(batch(10), &NeverCancel).executed, 1);
+}
+
+#[test]
+fn normalized_range_reports_the_actual_stop_line_and_column() {
+    // "+\nabc\n-": 添字 1 の '-' はバイト 6、行 3、列 1、UTF-16 オフセット 6。
+    let (mut session, map) = session_and_map("+\nabc\n-");
+    assert_eq!(set_breakpoint_on_line(&mut session, &map, 2), Some(1));
+    let index = session
+        .breakpoints()
+        .iter()
+        .next()
+        .expect("添字 1 が設定されている");
+
+    let range = map.range_of(index).expect("範囲内の添字");
+    assert_eq!(range.start.byte_offset, 6);
+    assert_eq!(range.start.line, 3);
+    assert_eq!(range.start.column, 1);
+    assert_eq!(range.start.utf16_offset, 6);
+    assert_eq!(range.end.byte_offset, 7);
+    assert_eq!(range.end.column, 2);
+
+    // 実際の停止位置(pc)の範囲が、設定時に問い合わせた範囲と一致する。
+    session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(session.snapshot().pc, index);
+    assert_eq!(map.range_of(session.snapshot().pc), Some(range));
+}
+
+#[test]
+fn utf16_comment_offsets_normalize_to_the_next_instruction_index() {
+    // "😀a+-": UTF-16 で 😀 は 0〜1(サロゲートペア)、a は 2、'+' は 3(添字 0)、'-' は 4(添字 1)。
+    let (mut session, map) = session_and_map("😀a+-");
+
+    // サロゲートペアの途中、コメント 'a' 上は次の命令(添字 0)へ正規化される。
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 1), Some(0));
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 2), Some(0));
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 4), Some(1));
+    assert_eq!(indices(session.breakpoints()), vec![0, 1]);
+}
+
+#[test]
+fn utf16_normalization_matches_byte_normalization_for_the_same_position() {
+    // "😀a+-": バイト 0〜3 が 😀、4 が 'a'、5 が '+'、6 が '-'、長さ 7。
+    // 各 UTF-16 オフセットは「そこから先で最初の文字」のバイトオフセットと同じ命令へ正規化されるべき。
+    // (UTF-16 オフセット, 同じ位置のバイトオフセット, 期待される命令添字)
+    let cases: [(usize, usize, Option<usize>); 6] = [
+        (0, 0, Some(0)),
+        (1, 4, Some(0)), // サロゲートペアの途中 → 次の文字 'a' と同じ
+        (2, 4, Some(0)),
+        (3, 5, Some(0)),
+        (4, 6, Some(1)),
+        (5, 7, None), // 末尾以降
+    ];
+    let (_, map) = session_and_map("😀a+-");
+
+    for (utf16_offset, byte_offset, expected) in cases {
+        assert_eq!(
+            map.instruction_at_or_after_utf16(utf16_offset),
+            expected,
+            "utf16 offset {utf16_offset}"
+        );
+        assert_eq!(
+            map.instruction_at_or_after_offset(byte_offset),
+            expected,
+            "byte offset {byte_offset}"
+        );
+    }
+}
+
+#[test]
+fn utf16_offset_past_the_last_instruction_is_not_set_and_set_is_unchanged() {
+    // "😀a+bc": 命令は '+' のみ(UTF-16 で 3、添字 0)。後続の 'b'・'c' はコメント。
+    let (mut session, map) = session_and_map("😀a+bc");
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 3), Some(0));
+    let before = session.breakpoints().clone();
+
+    // 'b'・'c' 上、ソース末尾(UTF-16 で 6)、ソース長を超える位置。
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 4), None);
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 5), None);
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 6), None);
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 100), None);
+    assert_eq!(session.breakpoints(), &before);
+}
+
+#[test]
+fn utf16_comment_breakpoint_stops_right_before_the_next_instruction_when_run() {
+    // "😀a+-": UTF-16 の 'a'(2)上の要求は添字 0 の '+' の直前で止まる。
+    let (mut session, map) = session_and_map("😀a+-");
+    assert_eq!(set_breakpoint_at_utf16(&mut session, &map, 2), Some(0));
+
+    let report = session.run_batch(batch(10), &NeverCancel);
+    assert_eq!(report.stop, Ok(StopReason::Breakpoint));
+    assert_eq!(report.executed, 0);
+    assert_eq!(session.snapshot().pc, 0);
+    assert_eq!(session.snapshot().steps_executed, 0);
 }
