@@ -27,6 +27,48 @@
 //! assert_eq!(machine.tape().len(), brainfuck_core::TAPE_SIZE);
 //! ```
 //!
+//! # デバッグの基本の流れ
+//!
+//! 解析 → ソース位置変換の構築 → セッション生成 → ブレークポイント設定 → バッチ実行 → 状態ビュー、の順に使う。
+//! 停止位置は位置変換の範囲でソース上の場所に対応付けられる。キャンセル指示は使わない例である。
+//!
+//! ```
+//! use brainfuck_core::{
+//!     BatchSize, DebugSession, MachineConfig, NeverCancel, Program, SourceMap, StopReason,
+//!     DEFAULT_WINDOW_RADIUS,
+//! };
+//!
+//! // コメント文字(`comment` の部分)は命令ではない。命令は `+` `+` `+` `.` の 4 個である。
+//! let source = "++ comment\n+.";
+//! let program = Program::parse(source).expect("valid source");
+//! let source_map = SourceMap::new(&program, source).expect("source matches program");
+//! let mut session = DebugSession::new(program, Vec::new(), MachineConfig::with_max_steps(1_000));
+//!
+//! // 3 番目の `+`(命令添字 2)にブレークポイントを置く。
+//! assert_eq!(session.breakpoints_mut().insert(2), Ok(true));
+//!
+//! // 1 回目のバッチ実行は命令添字 2 の直前で停止する。
+//! let report = session.run_batch(BatchSize::DEFAULT, &NeverCancel);
+//! assert_eq!(report.stop, Ok(StopReason::Breakpoint));
+//! assert_eq!(report.executed, 2);
+//! assert_eq!(report.snapshot.pc, 2);
+//!
+//! // 停止位置の命令は、ソース上の 2 行目 1 列目にある。
+//! let range = source_map.range_of(report.snapshot.pc).expect("instruction in range");
+//! assert_eq!((range.start.line, range.start.column), (2, 1));
+//!
+//! // 状態ビューは窓・出力・直近の停止理由を一度に返す。
+//! let view = session.state_view(DEFAULT_WINDOW_RADIUS);
+//! assert_eq!(view.last_stop, Some(StopReason::Breakpoint));
+//! assert_eq!(view.snapshot.data_pointer, 0);
+//! assert_eq!(view.tape_window.cells[view.tape_window.pointer_offset], 2);
+//!
+//! // 再開すると同じ位置で止まらず、残りを実行して正常終了する。出力は 3 のバイトである。
+//! let report = session.run_batch(BatchSize::DEFAULT, &NeverCancel);
+//! assert_eq!(report.stop, Ok(StopReason::Halted));
+//! assert_eq!(session.state_view(DEFAULT_WINDOW_RADIUS).output, &[3u8][..]);
+//! ```
+//!
 //! # 公開しない契約
 //!
 //! 括弧対応表(`jump_table`)は crate 内部専用であり、外部からは読めない。
@@ -121,15 +163,9 @@ pub use instruction::Instruction;
 pub use machine::{Machine, MachineConfig, MachineSnapshot, StepResult, StopReason, TAPE_SIZE};
 pub use parser::Program;
 
-// デバッグ拡張の公開項目は各モジュールから glob で再公開する。
-// 現時点では各モジュールが空のため、再公開先が無い警告を抑止する(5.1 で整理する)。
-#[allow(unused_imports)]
+// デバッグ拡張の公開項目は各モジュールから glob で再公開する(crate ルート直下のパスで使える)。
 pub use breakpoint::*;
-#[allow(unused_imports)]
 pub use cancel::*;
-#[allow(unused_imports)]
 pub use session::*;
-#[allow(unused_imports)]
 pub use source_map::*;
-#[allow(unused_imports)]
 pub use view::*;
