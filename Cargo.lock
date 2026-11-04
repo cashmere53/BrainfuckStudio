@@ -12,3 +12,10 @@ dependencies = [
 [[package]]
 name = "brainfuck-core"
 version = "0.1.0"
+
+[[package]]
+name = "brainfuck-optimized"
+version = "0.1.0"
+dependencies = [
+ "brainfuck-core",
+]

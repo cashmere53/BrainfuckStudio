@@ -1,0 +1,16 @@
+[package]
+name = "brainfuck-optimized"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brainfuck-core = { path = "../brainfuck-core" }
+
+# 素朴実装と最適化実装の比較ベンチマーク。標準のテストハーネスを使わないため、
+# `cargo test` では実行されず、`cargo bench -p brainfuck-optimized` でのみ実行する。
+[[bench]]
+name = "interpreter_comparison"
+harness = false
