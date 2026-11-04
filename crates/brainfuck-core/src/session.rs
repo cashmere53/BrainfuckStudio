@@ -90,9 +90,11 @@ pub struct DebugSession {
     breakpoints: BreakpointSet,
     /// 直近の停止理由。
     last_stop: Option<StopReason>,
-    /// 次の 1 命令でブレークポイント照合を省略するかどうか。
-    // 読み取りはバッチ実行(タスク 3.4)で行う。それまでは書き込みのみ。
-    #[allow(dead_code)]
+    /// 次の 1 命令でブレークポイント照合を省略するかどうか(再開フラグ)。
+    ///
+    /// 真になるのは `Breakpoint` で停止したときと Step Into が命令を実行したときで、
+    /// 次に 1 命令が実行されると偽に戻る。照合を省略することで、停止位置の命令は必ず前進し、
+    /// 同じ位置で停止し続けない。キャンセル・停止・バッチ到達・エラーでは変更しない。
     skip_breakpoint_once: bool,
 }
 
@@ -170,12 +172,19 @@ impl DebugSession {
 
     /// バッチ実行: 最大 `size` 個の有効な命令を、core の `step()` と同じ意味論で実行する(タスク 3.3)。
     ///
-    /// 各反復の判定順序は次のとおり。
+    /// 各反復の判定順序は次のとおり(停止 → キャンセル → ブレークポイント → バッチ幅 → 実行)。
     /// 1. 停止状態なら実行せず `Halted`(実行数 0 の呼び出しでは状態不変)。
     /// 2. `cancel` が真を返したら実行せず `Cancelled`。命令の直前にちょうど 1 回だけ問い合わせる。
-    /// 3. (ブレークポイント照合はタスク 3.4 でこの位置に挿入する。本タスクでは行わない)
+    /// 3. 再開フラグが偽かつ現在の `pc` がブレークポイントなら、実行せず `Breakpoint`。
+    ///    照合はバッチ幅の判定より前に行うため、バッチ境界ちょうどの `pc` を見逃さない。
+    ///    `Breakpoint` で停止するとき再開フラグを真にする。
     /// 4. 実行数がバッチ命令数に到達していれば `StepLimitReached`。
-    /// 5. `step()` を 1 回呼ぶ。`Executed` なら実行数を加算して 1 へ戻る。`Err` ならそのエラーを返す。
+    /// 5. `step()` を 1 回呼ぶ。`Executed` なら実行数を加算し、再開フラグを偽に戻して 1 へ戻る。
+    ///    `Err` ならそのエラーを返す。
+    ///
+    /// 再開フラグの規則: `Breakpoint` で停止した後、または Step Into が命令を実行した後の
+    /// 次の 1 命令だけはブレークポイント照合を省略する。これにより停止位置の命令は必ず前進する。
+    /// `Cancelled`・`Halted`・`StepLimitReached`・`Err` では再開フラグを変更しない。
     ///
     /// 最後の 1 命令の実行で停止に達した場合は、次の反復の 1 で `Halted` になる(`StepLimitReached` より優先)。
     /// 機械の命令数上限の超過とポインタ範囲外は `Err` として `stop` に載せ、機械は core の規約どおり不変である。
@@ -194,11 +203,18 @@ impl DebugSession {
             if cancel.is_cancelled() {
                 break Ok(StopReason::Cancelled);
             }
+            if !self.skip_breakpoint_once && self.breakpoints.contains(self.machine.snapshot().pc) {
+                self.skip_breakpoint_once = true;
+                break Ok(StopReason::Breakpoint);
+            }
             if executed >= limit {
                 break Ok(StopReason::StepLimitReached);
             }
             match self.machine.step() {
-                Ok(StepResult::Executed) => executed += 1,
+                Ok(StepResult::Executed) => {
+                    executed += 1;
+                    self.skip_breakpoint_once = false;
+                }
                 // 停止状態は上の判定で除外済みのため到達しない。防御的に `Halted` として扱う。
                 Ok(StepResult::Halted) => break Ok(StopReason::Halted),
                 Err(error) => break Err(error),
