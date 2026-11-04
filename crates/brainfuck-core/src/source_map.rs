@@ -172,6 +172,55 @@ impl SourceMap {
         Some(SourceRange { start, end })
     }
 
+    /// バイトオフセットの位置にある命令を返す(厳密一致)。
+    ///
+    /// 命令文字の始点でのみ `Some` を返す。コメント文字・範囲外・文字境界でない位置は `None`。
+    pub fn instruction_at_offset(&self, byte_offset: usize) -> Option<usize> {
+        self.starts
+            .binary_search_by_key(&byte_offset, |start| start.byte_offset)
+            .ok()
+    }
+
+    /// バイトオフセット以降で最初の命令を返す(下限探索)。
+    ///
+    /// コメント上や文字境界の途中は次の命令になる。後続命令がなければ `None`。
+    pub fn instruction_at_or_after_offset(&self, byte_offset: usize) -> Option<usize> {
+        self.first_at_or_after(|start| start.byte_offset >= byte_offset)
+    }
+
+    /// UTF-16 コード単位オフセットの位置にある命令を返す(厳密一致)。
+    ///
+    /// 命令文字の始点でのみ `Some` を返す。コメント文字・サロゲートペアの途中・範囲外は `None`。
+    /// 呼び出し側が UTF-16 の始点表を自前で作る必要はない。命令 → UTF-16 は
+    /// [`SourceMap::range_of`] の始点・終点の `utf16_offset` で得られる。
+    pub fn instruction_at_utf16(&self, utf16_offset: usize) -> Option<usize> {
+        self.starts
+            .binary_search_by_key(&utf16_offset, |start| start.utf16_offset)
+            .ok()
+    }
+
+    /// UTF-16 コード単位オフセット以降で最初の命令を返す(下限探索)。
+    ///
+    /// コメント上・サロゲートペアの途中は次の命令になる。後続命令がなければ `None`。
+    /// 意味論は [`SourceMap::instruction_at_or_after_offset`] と同一である。
+    pub fn instruction_at_or_after_utf16(&self, utf16_offset: usize) -> Option<usize> {
+        self.first_at_or_after(|start| start.utf16_offset >= utf16_offset)
+    }
+
+    /// 1 始まりの行番号について、その行の先頭以降で最初の命令を返す。
+    ///
+    /// 命令のない行は後続行の命令に正規化される。行番号 0・行数超過・後続命令なしは `None`。
+    pub fn first_instruction_on_line(&self, line: usize) -> Option<usize> {
+        let line_start = *self.line_starts.get(line.checked_sub(1)?)?;
+        self.first_at_or_after(|start| start.byte_offset >= line_start)
+    }
+
+    /// 述語を満たす最初の命令添字を返す。`starts` は命令順に単調増加のため二分探索で求める。
+    fn first_at_or_after(&self, reached: impl Fn(&SourcePosition) -> bool) -> Option<usize> {
+        let index = self.starts.partition_point(|start| !reached(start));
+        (index < self.starts.len()).then_some(index)
+    }
+
     /// ソース文字列とバイトオフセットから位置を返す(プログラム不要)。
     ///
     /// 位置の規則は [`SourceMap::new`] と同一である。`byte_offset == source.len()` は有効(末尾位置)。

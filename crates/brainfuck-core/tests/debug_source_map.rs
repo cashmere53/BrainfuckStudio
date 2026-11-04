@@ -4,7 +4,12 @@
 //! `SourceMap::new` の全命令分の範囲が、同じ規則(バイト・行・列・UTF-16)で一致することを確認する。
 //! 行・列の規則: 行区切りは `\n`・`\r\n`(1 個)・`\r`、列はスカラ値の個数 + 1、UTF-16 はコード単位数。
 
-use brainfuck_core::{Program, SourceMap, SourceMapError, SourcePosition, SourceRange};
+mod debug_common;
+
+use brainfuck_core::{
+    MachineConfig, Program, SourceMap, SourceMapError, SourcePosition, SourceRange,
+};
+use debug_common::machine_from;
 
 /// 位置を (バイト, 行, 列, UTF-16) の組として表す。
 ///
@@ -331,4 +336,222 @@ fn unexpected_error_text_contains_the_offset_number() {
 fn source_map_error_is_a_std_error() {
     fn assert_error<T: std::error::Error + Send + Sync + 'static>() {}
     assert_error::<SourceMapError>();
+}
+
+// --- 逆引き(ソース位置から命令)。タスク 2.5 ---
+
+/// 逆引き検証用のソース。
+///
+/// バイト: あ 0-2, + 3, \r 4, \n 5, 😀 6-9, - 10, / 11, / 12, \n 13, [ 14, - 15, ] 16(全長 17)
+/// UTF-16: あ 0, + 1, \r 2, \n 3, 😀 4-5, - 6, / 7, / 8, \n 9, [ 10, - 11, ] 12(全長 13)
+/// 命令: 0 `+`(バイト 3 / UTF-16 1)、1 `-`(10 / 6)、2 `[`(14 / 10)、3 `-`(15 / 11)、4 `]`(16 / 12)
+const LOOKUP_SOURCE: &str = "あ+\r\n😀-//\n[-]";
+
+// -- UTF-16 厳密一致 --
+
+#[test]
+fn utf16_strict_lookup_hits_instruction_starts_only() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_utf16(1), Some(0));
+    assert_eq!(map.instruction_at_utf16(6), Some(1));
+    assert_eq!(map.instruction_at_utf16(10), Some(2));
+    assert_eq!(map.instruction_at_utf16(12), Some(4));
+}
+
+#[test]
+fn utf16_strict_lookup_misses_comments_surrogate_middle_and_out_of_range() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_utf16(0), None); // あ(コメント)
+    assert_eq!(map.instruction_at_utf16(2), None); // \r
+    assert_eq!(map.instruction_at_utf16(4), None); // 😀 の先頭
+    assert_eq!(map.instruction_at_utf16(5), None); // 😀 のサロゲートペアの途中
+    assert_eq!(map.instruction_at_utf16(7), None); // コメント `/`
+    assert_eq!(map.instruction_at_utf16(13), None); // 末尾
+    assert_eq!(map.instruction_at_utf16(usize::MAX), None);
+}
+
+// -- UTF-16 以降 --
+
+#[test]
+fn utf16_or_after_lookup_moves_forward_over_comments_and_surrogate_middles() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_or_after_utf16(0), Some(0));
+    assert_eq!(map.instruction_at_or_after_utf16(1), Some(0));
+    assert_eq!(map.instruction_at_or_after_utf16(2), Some(1));
+    assert_eq!(map.instruction_at_or_after_utf16(5), Some(1));
+    assert_eq!(map.instruction_at_or_after_utf16(7), Some(2));
+    assert_eq!(map.instruction_at_or_after_utf16(11), Some(3));
+    assert_eq!(map.instruction_at_or_after_utf16(12), Some(4));
+    assert_eq!(map.instruction_at_or_after_utf16(13), None);
+    assert_eq!(map.instruction_at_or_after_utf16(usize::MAX), None);
+}
+
+#[test]
+fn utf16_or_after_agrees_with_byte_or_after_on_the_same_positions() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    // 同じ位置関係にある(バイト, UTF-16)の組は、バイト版と UTF-16 版で同じ命令を指す。
+    let byte_offsets = [0, 3, 4, 6, 10, 11, 14, 16];
+    let utf16_offsets = [0, 1, 2, 4, 6, 7, 10, 12];
+    for (byte_offset, utf16_offset) in byte_offsets.into_iter().zip(utf16_offsets) {
+        assert_eq!(
+            map.instruction_at_or_after_offset(byte_offset),
+            map.instruction_at_or_after_utf16(utf16_offset),
+            "バイト {byte_offset} と UTF-16 {utf16_offset}"
+        );
+    }
+}
+
+// -- バイトオフセット厳密一致・以降 --
+
+#[test]
+fn byte_strict_lookup_hits_instruction_starts_only() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_offset(3), Some(0));
+    assert_eq!(map.instruction_at_offset(10), Some(1));
+    assert_eq!(map.instruction_at_offset(14), Some(2));
+    assert_eq!(map.instruction_at_offset(16), Some(4));
+}
+
+#[test]
+fn byte_strict_lookup_misses_comments_multibyte_middle_and_out_of_range() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_offset(0), None); // あ(コメント)
+    assert_eq!(map.instruction_at_offset(1), None); // あ の途中
+    assert_eq!(map.instruction_at_offset(4), None); // \r
+    assert_eq!(map.instruction_at_offset(6), None); // 😀 の先頭
+    assert_eq!(map.instruction_at_offset(7), None); // 😀 の途中
+    assert_eq!(map.instruction_at_offset(11), None); // コメント `/`
+    assert_eq!(map.instruction_at_offset(17), None); // 末尾
+    assert_eq!(map.instruction_at_offset(usize::MAX), None);
+}
+
+#[test]
+fn byte_or_after_lookup_moves_forward_and_never_panics_inside_characters() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.instruction_at_or_after_offset(0), Some(0));
+    assert_eq!(map.instruction_at_or_after_offset(1), Some(0));
+    assert_eq!(map.instruction_at_or_after_offset(4), Some(1));
+    assert_eq!(map.instruction_at_or_after_offset(7), Some(1));
+    assert_eq!(map.instruction_at_or_after_offset(11), Some(2));
+    assert_eq!(map.instruction_at_or_after_offset(16), Some(4));
+    assert_eq!(map.instruction_at_or_after_offset(17), None);
+    assert_eq!(map.instruction_at_or_after_offset(usize::MAX), None);
+}
+
+// -- 行から(先頭以降で最初の命令) --
+
+#[test]
+fn first_instruction_on_line_returns_the_first_instruction_at_or_after_the_line_start() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    assert_eq!(map.line_count(), 3);
+    assert_eq!(map.first_instruction_on_line(1), Some(0));
+    assert_eq!(map.first_instruction_on_line(2), Some(1));
+    assert_eq!(map.first_instruction_on_line(3), Some(2));
+}
+
+#[test]
+fn first_instruction_on_a_line_without_instructions_normalizes_to_the_following_line() {
+    // 2 行目はコメントのみ、3 行目は空行、4 行目に命令。
+    let (_program, map) = map_of("+\n//\n\n-");
+    assert_eq!(map.first_instruction_on_line(2), Some(1));
+    assert_eq!(map.first_instruction_on_line(3), Some(1));
+    assert_eq!(map.first_instruction_on_line(4), Some(1));
+}
+
+#[test]
+fn first_instruction_on_line_is_none_for_zero_line_out_of_range_and_no_following_instruction() {
+    let (_program, map) = map_of("+\n//");
+    assert_eq!(map.line_count(), 2);
+    assert_eq!(map.first_instruction_on_line(0), None);
+    assert_eq!(map.first_instruction_on_line(2), None); // 後続命令なし
+    assert_eq!(map.first_instruction_on_line(3), None); // 行数超過
+    assert_eq!(map.first_instruction_on_line(usize::MAX), None);
+}
+
+#[test]
+fn empty_line_before_a_later_instruction_is_normalized_to_that_instruction() {
+    let (_program, map) = map_of("+\n\n-");
+    assert_eq!(map.first_instruction_on_line(2), Some(1));
+}
+
+// -- 往復 --
+
+#[test]
+fn start_offsets_and_utf16_offsets_round_trip_to_the_same_instruction() {
+    let (_program, map) = map_of(LOOKUP_SOURCE);
+    for index in 0..map.instruction_count() {
+        let start = map.range_of(index).expect("範囲内").start;
+        assert_eq!(map.instruction_at_offset(start.byte_offset), Some(index));
+        assert_eq!(
+            map.instruction_at_or_after_offset(start.byte_offset),
+            Some(index)
+        );
+        assert_eq!(map.instruction_at_utf16(start.utf16_offset), Some(index));
+        assert_eq!(
+            map.instruction_at_or_after_utf16(start.utf16_offset),
+            Some(index)
+        );
+        let line_head = map
+            .first_instruction_on_line(start.line)
+            .expect("命令のある行には先頭命令がある");
+        assert!(
+            line_head <= index,
+            "行 {} の先頭命令は {index} 以前",
+            start.line
+        );
+        assert_eq!(
+            map.range_of(line_head).expect("範囲内").start.line,
+            start.line
+        );
+    }
+}
+
+// -- 現在命令の範囲(pc による範囲取得) --
+
+#[test]
+fn range_of_the_current_pc_is_the_current_instruction_and_none_when_halted() {
+    let mut machine = machine_from("+-", &[], MachineConfig::unlimited());
+    let (_program, map) = map_of("+-");
+    let before = machine.snapshot();
+    assert_eq!(before.pc, 0);
+    assert_eq!(
+        map.range_of(before.pc).map(|r| r.start.byte_offset),
+        Some(0)
+    );
+
+    machine.step().expect("1 命令目は成功する");
+    let mid = machine.snapshot();
+    assert_eq!(map.range_of(mid.pc).map(|r| r.start.byte_offset), Some(1));
+
+    machine.step().expect("2 命令目は成功する");
+    let halted = machine.snapshot();
+    assert!(halted.halted);
+    assert_eq!(halted.pc, map.instruction_count());
+    assert_eq!(map.range_of(halted.pc), None);
+}
+
+// -- 命令 0 個 --
+
+#[test]
+fn zero_instruction_source_answers_none_for_every_lookup() {
+    let (_program, map) = map_of("abc\n\u{3042}");
+    assert_eq!(map.instruction_count(), 0);
+    assert_eq!(map.instruction_at_offset(0), None);
+    assert_eq!(map.instruction_at_or_after_offset(0), None);
+    assert_eq!(map.instruction_at_utf16(0), None);
+    assert_eq!(map.instruction_at_or_after_utf16(0), None);
+    assert_eq!(map.first_instruction_on_line(1), None);
+    assert_eq!(map.first_instruction_on_line(2), None);
+    assert_eq!(map.range_of(0), None);
+}
+
+#[test]
+fn empty_source_answers_none_for_every_lookup() {
+    let (_program, map) = map_of("");
+    assert_eq!(map.instruction_at_offset(0), None);
+    assert_eq!(map.instruction_at_or_after_offset(0), None);
+    assert_eq!(map.instruction_at_utf16(0), None);
+    assert_eq!(map.instruction_at_or_after_utf16(0), None);
+    assert_eq!(map.first_instruction_on_line(1), None);
+    assert_eq!(map.line_count(), 1);
 }
