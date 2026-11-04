@@ -100,3 +100,20 @@ fn xorshift_is_reproducible_from_a_fixed_seed_and_never_sticks_at_zero() {
     assert_ne!(zero_seed.next_u64(), 0);
     assert!((0..100).all(|_| zero_seed.below(7) < 7));
 }
+
+#[test]
+#[should_panic(expected = "steps executed: core=")]
+fn mismatched_step_count_makes_the_assertion_panic() {
+    let core = observe_core("+.", &[], MachineConfig::unlimited());
+    let mut optimized = core.clone();
+    optimized.steps_executed += 1;
+    common::assert_observations_equivalent("label", &core, &optimized, 1);
+}
+
+#[test]
+#[should_panic(expected = "exceed naive steps")]
+fn ir_operations_above_naive_steps_make_the_assertion_panic() {
+    let core = observe_core("+.", &[], MachineConfig::unlimited());
+    let ir_ops = core.steps_executed + 1;
+    common::assert_observations_equivalent("label", &core, &core.clone(), ir_ops);
+}

@@ -162,7 +162,19 @@ pub fn assert_equivalent(source: &str, input: &[u8], config: MachineConfig) {
     let core = observe_core(source, input, config);
     let (optimized, ir_ops) = observe_optimized(source, input, config);
     let label = format!("source {source:?}, input {input:?}, config {config:?}");
-    let diff = compare_observations(&core, &optimized);
+    assert_observations_equivalent(&label, &core, &optimized, ir_ops);
+}
+
+/// 収集済みの観測結果の組を検査する。不一致または IR 操作の実行回数の超過があれば、`label` を含めて panic する。
+///
+/// [`assert_equivalent`] の検査部分。収集を伴わないため、検出の負のテストに用いる。
+pub fn assert_observations_equivalent(
+    label: &str,
+    core: &Observation,
+    optimized: &Observation,
+    ir_ops: u64,
+) {
+    let diff = compare_observations(core, optimized);
     assert!(
         diff.is_empty(),
         "optimized differs from core ({label}): {diff}"
