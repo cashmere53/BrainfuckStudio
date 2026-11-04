@@ -4,8 +4,7 @@
 //! 操作は [`Op::static_reach`] の範囲条件を評価して満たさなければ縮退 → 適用」。縮退を返すときは
 //! 実行状態を一切変更しない。コストと到達範囲の式は `ir` の公開ヘルパにのみ置き、ここには持たない。
 //!
-//! クリアと移動/加算/乗算(`Clear` / `Transfer`)は 3.3 で一括適用を実装した。走査(`Scan`)は
-//! 3.2 の時点の仮の縮退のまま、3.4 がその分岐を置き換える。
+//! クリアと移動/加算/乗算(`Clear` / `Transfer`)は 3.3、走査(`Scan`)は 3.4 で一括適用を実装した。
 //!
 //! 呼び出し元は 3.6 で揃うため、それまで未使用警告を許可する(3.6 で除去する)。
 
@@ -109,15 +108,51 @@ pub(crate) fn execute(op: &Op, st: &mut ExecState, remaining: u64) -> FastOutcom
             }
             st.ir_pc + 1
         }
-        // 3.4 で一括適用を実装するまでは仮に縮退する。
-        OpKind::Scan { .. } => {
-            return FastOutcome::Fallback;
-        }
+        OpKind::Scan { stride } => return scan(op, *stride, st, remaining),
     };
 
     st.replay.steps_executed = st.replay.steps_executed.saturating_add(cost);
     st.ir_ops_executed = st.ir_ops_executed.saturating_add(1);
     st.ir_pc = next_pc;
+    FastOutcome::Applied
+}
+
+/// 走査ループ(`Scan`)を一括適用する。
+///
+/// 開始セルが 0 なら本体は実行されないためコスト 1 で何もしない。非 0 なら `stride` ずつ進んで
+/// 最初に 0 のセルに至るまでの反復数 `k` を求め、コストを [`Op::naive_cost`] の閉形式で得る。
+/// 0 のセルに至る前にテープ範囲を出る場合は、素朴実装が範囲外エラーを返すため縮退する。
+/// 残り予算を超える反復数に達した時点で走査を打ち切る(`k` は少なくとも `反復数 + 1` になるため)。
+fn scan(op: &Op, stride: isize, st: &mut ExecState, remaining: u64) -> FastOutcome {
+    let dp = st.replay.dp;
+    let cell = st.replay.tape[dp];
+    let (end, cost) = if cell == 0 {
+        (dp, op.naive_cost(cell, 0))
+    } else {
+        let mut pos = dp;
+        let mut k: u64 = 0;
+        loop {
+            let Some(next) = pos.checked_add_signed(stride).filter(|&p| p < TAPE_SIZE) else {
+                return FastOutcome::Fallback;
+            };
+            pos = next;
+            k += 1;
+            if st.replay.tape[pos] == 0 {
+                break (pos, op.naive_cost(cell, k));
+            }
+            if op.naive_cost(cell, k + 1) > remaining {
+                return FastOutcome::Fallback;
+            }
+        }
+    };
+    if cost > remaining {
+        return FastOutcome::Fallback;
+    }
+
+    st.replay.dp = end;
+    st.replay.steps_executed = st.replay.steps_executed.saturating_add(cost);
+    st.ir_ops_executed = st.ir_ops_executed.saturating_add(1);
+    st.ir_pc += 1;
     FastOutcome::Applied
 }
 
@@ -543,14 +578,148 @@ mod tests {
         );
     }
 
+    fn scan(stride: isize, source_len: usize) -> Op {
+        op(OpKind::Scan { stride }, source_len)
+    }
+
     #[test]
-    fn scan_falls_back_until_task_3_4_lands() {
-        let mut st = state_at(0, 4);
+    fn scan_right_stops_on_the_first_zero_cell_and_costs_its_closed_form() {
+        // [>] 相当: tape[1] は非 0、tape[2] = 0 → k = 2、換算 1 + 2 * (1 + 1) = 5
+        let mut st = state_at(0, 5);
+        st.replay.tape[1] = 7;
+        st.ir_pc = 3;
+        assert_eq!(
+            execute(&scan(1, 1), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.dp, 2);
+        assert_eq!(st.replay.steps_executed, 5);
+        assert_eq!(st.ir_ops_executed, 1);
+        assert_eq!(st.ir_pc, 4);
+    }
+
+    #[test]
+    fn scan_left_uses_the_magnitude_of_the_stride() {
+        // [<<] 相当: 位置 10 → 8 → 6、tape[6] = 0 → k = 2、換算 1 + 2 * (2 + 1) = 7
+        let mut st = state_at(10, 1);
+        st.replay.tape[8] = 1;
+        assert_eq!(
+            execute(&scan(-2, 2), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.dp, 6);
+        assert_eq!(st.replay.steps_executed, 7);
+        assert_eq!(st.ir_ops_executed, 1);
+    }
+
+    #[test]
+    fn scan_with_multi_instruction_stride_steps_by_the_whole_stride() {
+        // [>>>] 相当: 位置 0 → 3 → 6 → 9、tape[9] = 0 → k = 3、換算 1 + 3 * (3 + 1) = 13
+        let mut st = state_at(0, 9);
+        st.replay.tape[3] = 1;
+        st.replay.tape[6] = 2;
+        assert_eq!(
+            execute(&scan(3, 3), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.dp, 9);
+        assert_eq!(st.replay.steps_executed, 13);
+    }
+
+    #[test]
+    fn scan_from_a_zero_cell_is_a_no_op_costing_one() {
+        let mut st = state_at(4, 0);
+        st.replay.tape[5] = 9;
         let before = st.clone();
         assert_eq!(
-            execute(&op(OpKind::Scan { stride: 1 }, 1), &mut st, u64::MAX),
+            execute(&scan(1, 1), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.dp, 4);
+        assert_eq!(st.replay.tape, before.replay.tape);
+        assert_eq!(st.replay.steps_executed, 1);
+        assert_eq!(st.ir_ops_executed, 1);
+        assert_eq!(st.ir_pc, 1);
+    }
+
+    #[test]
+    fn scan_for_every_start_value_matches_the_closed_form() {
+        for v in VALUES {
+            let mut st = state_at(100, v);
+            st.replay.tape[101] = 3;
+            st.replay.tape[102] = 4;
+            st.replay.tape[103] = 0;
+            let expected = if v == 0 { 1 } else { 1 + 3 * 2 };
+            assert_eq!(
+                execute(&scan(1, 1), &mut st, u64::MAX),
+                FastOutcome::Applied,
+                "v={v}"
+            );
+            assert_eq!(st.replay.steps_executed, expected, "v={v}");
+            assert_eq!(st.replay.dp, if v == 0 { 100 } else { 103 }, "v={v}");
+        }
+    }
+
+    #[test]
+    fn scan_that_leaves_the_tape_before_a_zero_falls_back_without_changing_state() {
+        let last = TAPE_SIZE - 1;
+        let mut right = state_at(last - 1, 2);
+        right.replay.tape[last] = 5;
+        let before = right.clone();
+        assert_eq!(
+            execute(&scan(1, 1), &mut right, u64::MAX),
             FastOutcome::Fallback
         );
+        assert_eq!(right, before);
+
+        let mut left = state_at(1, 2);
+        left.replay.tape[0] = 5;
+        let before = left.clone();
+        assert_eq!(
+            execute(&scan(-1, 1), &mut left, u64::MAX),
+            FastOutcome::Fallback
+        );
+        assert_eq!(left, before);
+    }
+
+    #[test]
+    fn scan_reaching_the_last_cell_exactly_is_applied() {
+        let last = TAPE_SIZE - 1;
+        let mut st = state_at(last - 2, 1);
+        st.replay.tape[last - 1] = 1;
+        assert_eq!(
+            execute(&scan(1, 1), &mut st, u64::MAX),
+            FastOutcome::Applied
+        );
+        assert_eq!(st.replay.dp, last);
+        assert_eq!(st.replay.steps_executed, 1 + 2 * 2);
+    }
+
+    #[test]
+    fn scan_cost_above_the_remaining_budget_falls_back_without_changing_state() {
+        // 換算は 1 + 2 * 2 = 5
+        let mut st = state_at(0, 5);
+        st.replay.tape[1] = 7;
+        let before = st.clone();
+        assert_eq!(execute(&scan(1, 1), &mut st, 4), FastOutcome::Fallback);
+        assert_eq!(st, before);
+        assert_eq!(
+            execute(&scan(1, 1), &mut st, 5),
+            FastOutcome::Applied,
+            "コストがちょうど残りと等しいときは適用される"
+        );
+        assert_eq!(st.replay.dp, 2);
+    }
+
+    #[test]
+    fn scan_without_a_zero_cell_under_a_small_budget_falls_back_without_changing_state() {
+        // 0 のセルはテープ内に現れないが、残り予算が小さいので早期に縮退する
+        let mut st = state_at(0, 1);
+        for cell in st.replay.tape.iter_mut() {
+            *cell = 1;
+        }
+        let before = st.clone();
+        assert_eq!(execute(&scan(1, 1), &mut st, 10), FastOutcome::Fallback);
         assert_eq!(st, before);
     }
 
