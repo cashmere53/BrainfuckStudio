@@ -2,7 +2,13 @@
 import type { ApiErrorKind } from "./ApiErrorKind";
 
 /**
- * API エラー。`message` は固定の英語文面で、パス・ソース・入力などの機微情報を含まない。
+ * API エラー。`message` は種類から決まる固定の英語文面で、パス・ソース・入力などの機微情報を含まない。
+ * 唯一の例外は読み書きの失敗(`kind: io`)で、[`ApiError::io`] が作る文面は
+ * `failed to <read|write> file: <OS のエラー文>` である(要求 2.11。OS 文のみでパスを含まない)。
+ *
+ * 生成は [`ApiError::new`] または [`ApiError::io`] を使う。`message` / `field` は
+ * 公開フィールドのまま(応答の形と Deserialize のため)。サービス層は `ApiError { .. }` の
+ * リテラルで任意の文面を作らないこと(`tests/session_dto_contract.rs` で文面の形を検査する)。
  */
 export type ApiError = { 
 /**
@@ -10,7 +16,7 @@ export type ApiError = {
  */
 kind: ApiErrorKind, 
 /**
- * 固定の英語文面。
+ * 固定の英語文面(`io` のみ末尾に OS のエラー文を含む)。
  */
 message: string, 
 /**
