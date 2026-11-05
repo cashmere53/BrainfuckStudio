@@ -6,7 +6,7 @@ import type { SourceRangeDto } from "./SourceRangeDto";
  */
 export type BreakpointDto = { 
 /**
- * 要求された UTF-16 オフセット。
+ * 同じ命令へ解決した要求のうち、要求順で最初の UTF-16 オフセット。
  */
 utf16Offset: number, 
 /**

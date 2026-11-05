@@ -579,6 +579,22 @@ fn output_chunk_keeps_only_the_last_64_kib_and_reset_empties_it() {
 }
 
 #[test]
+fn non_utf8_output_bytes_are_carried_unchanged_in_the_base64_chunk() {
+    let service = service();
+    // `+` を 255 個してから `.` で 0xFF を出力する(UTF-8 として不正なバイト)。
+    let source = format!("{}.", "+".repeat(255));
+    let session = start(&service, &source, unlimited(), vec![]);
+
+    let result = run(&service, session, None);
+    assert_eq!(result.stop, BatchStopDto::Halted);
+    assert_eq!(result.state.output.total_len, 1);
+    assert_eq!(result.state.output.data_start, 0);
+    assert_eq!(decode(&result.state.output.data_base64), vec![0xFF]);
+    // 0xFF は置換されず、そのまま 1 バイトとして返る。
+    assert_eq!(result.state.output.data_base64, codec::encode(&[0xFF]));
+}
+
+#[test]
 fn every_batch_width_reaches_the_same_final_state_as_the_core() {
     let core = run_core(HELLO, b"", None);
     assert!(core.result.is_ok(), "hello.bf halts normally");
