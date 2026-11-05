@@ -116,20 +116,29 @@ pub struct CoreOutcome {
     pub steps: u64,
     /// テープ(機械が確保した範囲)。
     pub tape: Vec<u8>,
+    /// 読み取り済みの入力バイト数(`Machine::input_position`)。
+    pub input_consumed: usize,
     /// 完走の結果(正常終了、または実行エラー)。
     pub result: Result<StopReason, RuntimeError>,
+}
+
+/// ソースと入力から、`brainfuck_core` の機械を初期状態で作る(`max_steps` が `None` なら上限なし)。
+///
+/// ソースは解析に成功する必要がある。
+pub fn core_machine(source: &str, input: &[u8], max_steps: Option<u64>) -> Machine {
+    let program = Program::parse(source).expect("core oracle needs a valid program");
+    let config = match max_steps {
+        Some(limit) => MachineConfig::with_max_steps(limit),
+        None => MachineConfig::unlimited(),
+    };
+    Machine::new(program, input.to_vec(), config)
 }
 
 /// `brainfuck_core::Machine::run` でソースを完走させた結果を返す。
 ///
 /// `max_steps` が `None` のときは命令数の上限を設けない。ソースは解析に成功する必要がある。
 pub fn run_core(source: &str, input: &[u8], max_steps: Option<u64>) -> CoreOutcome {
-    let program = Program::parse(source).expect("core oracle needs a valid program");
-    let config = match max_steps {
-        Some(limit) => MachineConfig::with_max_steps(limit),
-        None => MachineConfig::unlimited(),
-    };
-    let mut machine = Machine::new(program, input.to_vec(), config);
+    let mut machine = core_machine(source, input, max_steps);
     let result = machine.run();
     let snapshot = machine.snapshot();
     CoreOutcome {
@@ -138,6 +147,7 @@ pub fn run_core(source: &str, input: &[u8], max_steps: Option<u64>) -> CoreOutco
         dp: snapshot.data_pointer,
         steps: snapshot.steps_executed,
         tape: machine.tape().to_vec(),
+        input_consumed: machine.input_position(),
         result,
     }
 }
