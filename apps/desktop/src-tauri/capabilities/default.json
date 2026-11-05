@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "メインウィンドウの権限。イベント権限と自アプリのコマンド許可のみ(ファイル/シェル/HTTP/ダイアログの WebView 権限は付与しない)",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}
