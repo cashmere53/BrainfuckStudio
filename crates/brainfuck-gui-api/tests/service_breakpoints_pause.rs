@@ -177,11 +177,23 @@ fn pause_stops_a_running_batch_with_cancelled_while_the_batch_holds_the_lock() {
 
     // バッチが `Mutex` を保持したまま走っている間に、別スレッドの `pause` が止めること。
     // `pause` がロックを取るなら、このテストは完了しない(期限で失敗させる)。
+    // ランナーは `batchReached` の間バッチを繰り返し、`cancelled` 以外で止まったら失敗とする。
+    // 一時停止の到着時刻に依存せず、一時停止が届いたバッチが必ず `cancelled` で終わる。
     let result = thread::scope(|scope| {
         let (done_tx, done_rx) = mpsc::channel::<()>();
         let shared: &DebuggerService = &service;
         let runner = scope.spawn(move || {
-            let result = run(shared, session, Some(MAX_BATCH_SIZE));
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let result = loop {
+                let result = run(shared, session, Some(MAX_BATCH_SIZE));
+                if result.stop != BatchStopDto::BatchReached {
+                    break result;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "no pause reached a running batch within 60 seconds"
+                );
+            };
             done_tx.send(()).ok();
             result
         });

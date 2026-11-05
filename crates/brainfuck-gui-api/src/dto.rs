@@ -547,7 +547,7 @@ pub struct StepResultDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BreakpointDto {
-    /// 要求された UTF-16 オフセット。
+    /// 同じ命令へ解決した要求のうち、要求順で最初の UTF-16 オフセット。
     pub utf16_offset: usize,
     /// 解決された命令添字。
     pub instruction_index: usize,

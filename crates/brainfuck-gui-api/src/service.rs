@@ -5,7 +5,7 @@
 //! (値・ソース・入力・パスを含めない)。
 //!
 //! 現在のセッション ID は `Mutex` の外からも照合できるよう `AtomicU64` にも写す(0 = セッションなし)。
-//! 書き込みは `Mutex` を保持したまま行う。`pause` は後続タスクでこの値だけを読む。
+//! 書き込みは `Mutex` を保持したまま行う。`pause` はこの値だけを読み、`Mutex` を取らない。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
