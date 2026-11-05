@@ -359,7 +359,7 @@
   - _Boundary: cli_parity core oracle_
   - _Requirements: 3.10, 11.1, 11.2, 11.4, 11.5, 11.6, 11.7, 11.8, 15.4_
 
-- [ ] 9.3 実 CLI バイナリとの結果一致テストを実装する
+- [x] 9.3 実 CLI バイナリとの結果一致テストを実装する
   - テストから `cargo build -p brainfuck-cli --message-format=json` を一度だけ実行し、出力の `executable` から実行ファイルの場所を取得する(ビルドのロック競合や時間が問題になる場合は、環境変数で既存バイナリの場所を指定できるようにする)。そのうえで、固定ケース(Hello World、入力あり、ポインタ範囲外、上限超過、括弧不整合)を実 CLI で実行して、標準出力のバイト列、`--dump-state` の状態行、終了コードの分類(0/2/3)をサービスの結果と比較する
   - 完了条件: `cargo test --workspace` で CLI を起動する一致テストが成功し、`examples/hello.bf` が `Hello World!\n` と `state: pc=106 dp=6 steps=906` で一致する
   - _Depends: 9.2_
