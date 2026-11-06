@@ -3,5 +3,16 @@
   "identifier": "default",
   "description": "メインウィンドウの権限。イベント権限と自アプリのコマンド許可のみ(ファイル/シェル/HTTP/ダイアログの WebView 権限は付与しない)",
   "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "permissions": [
+    "core:event:default",
+    "allow-load-source",
+    "allow-start-session",
+    "allow-run-batch",
+    "allow-step",
+    "allow-reset",
+    "allow-get-snapshot",
+    "allow-get-tape-window",
+    "allow-set-breakpoints",
+    "allow-pause"
+  ]
 }
