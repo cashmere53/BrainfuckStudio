@@ -116,6 +116,8 @@ function clientNoticeMessageJa(notice: ClientNotice): string {
       return "この行(カーソル以降)に命令が無いため、ブレークポイントを設定できません";
     case "inputSwitchRejected":
       return SWITCH_REJECT_MESSAGE_JA[notice.reason];
+    case "lossyReplaced":
+      return "ファイルに不正な UTF-8 のバイト列が含まれていたため、置換文字に置き換えて読み込みました";
   }
 }
 

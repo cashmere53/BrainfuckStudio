@@ -25,6 +25,12 @@
   grid-area: toolbar;
 }
 
+/* 文書の状態(ファイル名・未保存の変更)。色だけに頼らず文字で示す(要件 14.4) */
+.document-status {
+  margin: 4px 0 0;
+  font-size: 0.9em;
+}
+
 .debugger-area-editor {
   grid-area: editor;
   display: flex;

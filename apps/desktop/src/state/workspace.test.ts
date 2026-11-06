@@ -46,7 +46,7 @@ describe("編集と未保存表示", () => {
     ws.setSource("+");
     expect(ws.getSnapshot().source).toBe("+");
     expect(ws.getSnapshot().document.dirty).toBe(true);
-    ws.markSaved();
+    ws.markSaved(ws.getSnapshot().source);
     expect(ws.getSnapshot().document.dirty).toBe(false);
   });
 
@@ -62,8 +62,24 @@ describe("編集と未保存表示", () => {
   it("名前を付けて保存では保存先のファイル名を紐づけて未保存を解除する", () => {
     const ws = createWorkspace();
     ws.setSource("+");
-    ws.markSaved("hello.bf");
+    ws.markSaved(ws.getSnapshot().source, "hello.bf");
     expect(ws.getSnapshot().document).toEqual({ fileName: "hello.bf", dirty: false, lossyNotice: false });
+  });
+
+  it("保存時点のソースと現在のソースが異なれば未保存のまま残し、ファイル名だけ更新する(保存中の編集)", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    const sent = ws.getSnapshot().source;
+    ws.setSource("+.");
+    ws.markSaved(sent, "new.bf");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "new.bf", dirty: true, lossyNotice: false });
+  });
+
+  it("保存時点のソースと現在のソースが一致すれば未保存を解除する", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.markSaved(ws.getSnapshot().source, "new.bf");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "new.bf", dirty: false, lossyNotice: false });
   });
 
   it("入力の変更はソースの未保存フラグを変えない", () => {
@@ -213,8 +229,8 @@ describe("無変更ガード: 同じ値の設定は通知もスナップショ�
     },
     {
       name: "markSaved",
-      same: (ws) => ws.markSaved(),
-      change: (ws) => ws.markSaved("a.bf"),
+      same: (ws) => ws.markSaved(ws.getSnapshot().source),
+      change: (ws) => ws.markSaved(ws.getSnapshot().source, "a.bf"),
     },
     {
       name: "setInput",
@@ -367,7 +383,7 @@ describe("文書の置換回数 documentRevision(置換でだけ進む)", () => 
 
   const otherSetters: readonly [string, (ws: WorkspaceStore) => void][] = [
     ["setSource", (ws) => ws.setSource("+")],
-    ["markSaved", (ws) => ws.markSaved("a.bf")],
+    ["markSaved", (ws) => ws.markSaved(ws.getSnapshot().source, "a.bf")],
     ["setInput", (ws) => ws.setInput({ mode: "hex", text: "41" })],
     ["setLimitText", (ws) => ws.setLimitText("500")],
     ["setUnlimited", (ws) => ws.setUnlimited(true)],

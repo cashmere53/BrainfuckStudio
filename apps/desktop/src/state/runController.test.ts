@@ -574,7 +574,7 @@ describe("RunController: 無効化(invalidate)", () => {
     const { host, workspace, controller } = setup();
     await controller.ensureSession();
 
-    workspace.markSaved("a.bf");
+    workspace.markSaved(workspace.getSnapshot().source, "a.bf");
 
     expect(host.getState().phase).toBe("idle");
     expect(host.getState().sessionId).toBe(1);

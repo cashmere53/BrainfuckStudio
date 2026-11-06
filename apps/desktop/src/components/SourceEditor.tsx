@@ -9,6 +9,7 @@ import {
   breakpointExtensions,
   breakpointOffsets,
   setBreakpointOffsets,
+  toggleBreakpointAtCursor as toggleAtCursor,
 } from "../editor/breakpoints";
 import type { EditorDisplay } from "../editor/editorDisplay";
 import {
@@ -41,6 +42,11 @@ import { type WorkspaceStore, workspaceStore as defaultStore } from "../state/wo
 export interface SourceEditorHandle {
   /** 全ブレークポイントを外す(編集不可のときは何もしない)。8.1 の全解除ボタンが呼ぶ */
   clearBreakpoints(): void;
+  /**
+   * カーソル以降で最初の命令のブレークポイントを切り替える(編集不可のときは何もしない)。
+   * エディタにフォーカスが無いときの F9 を 8.2 のショートカットが呼ぶ(フォーカスがあればキーマップが処理する)。
+   */
+  toggleBreakpointAtCursor(): void;
 }
 
 export interface SourceEditorProps {
@@ -195,6 +201,11 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
         setBreakpointOffsets(view, []);
         // エディタに無い集合が Workspace に残っていても空にする(通常は一致している)
         store.setBreakpoints([]);
+      },
+      toggleBreakpointAtCursor() {
+        const view = viewRef.current;
+        if (!view || !latest.current.editable) return;
+        toggleAtCursor(view);
       },
     }),
     [store],

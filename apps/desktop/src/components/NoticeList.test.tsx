@@ -75,3 +75,13 @@ describe("NoticeList: クライアント通知(要件 3.7・6.3)", () => {
     expect(items[1]?.textContent).toContain("プログラムが読み込まれていません");
   });
 });
+
+describe("NoticeList: 重要度による見出し(要件 2.12)", () => {
+  it("成功・情報の通知(置換読み込み)は見出しを「通知」にし、操作エラーと見せない", () => {
+    render(<NoticeList notices={[{ kind: "client", code: "lossyReplaced" }]} />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("通知");
+    expect(alert.textContent).not.toContain("操作エラー");
+    expect(alert.textContent).toContain("置換文字");
+  });
+});

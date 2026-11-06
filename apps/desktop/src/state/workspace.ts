@@ -62,8 +62,11 @@ export type WorkspaceStore = {
   getSnapshot(): WorkspaceState;
   subscribe(listener: () => void): () => void;
   setSource(source: string): void;
-  /** 保存済みにする。`fileName` を渡すと紐づけ先のファイル名も更新する */
-  markSaved(fileName?: string): void;
+  /**
+   * 保存の完了を反映する。`savedSource` は保存時点のソース。現在のソースと一致するときだけ未保存を解除し、
+   * 保存中に編集されていれば未保存のまま残す(dirty の判定はここに閉じる)。`fileName` を渡すと紐づけ先も更新する。
+   */
+  markSaved(savedSource: string, fileName?: string): void;
   replaceDocument(args: ReplaceDocumentArgs): void;
   newDocument(): void;
   setInput(input: InputModel): void;
@@ -120,12 +123,15 @@ export function createWorkspace(): WorkspaceStore {
       commit({ ...state, source: normalized, document: { ...state.document, dirty: true } });
     },
 
-    markSaved(fileName) {
-      const nextName = fileName ?? state.document.fileName;
-      if (!state.document.dirty && nextName === state.document.fileName) {
+    markSaved(savedSource, fileName) {
+      // 紐づけ先は保存の結果そのもの(保存中の編集の有無に関係なく更新する)
+      const nextName = fileName === undefined ? state.document.fileName : fileName;
+      // 未保存は「保存時点のソース」と現在のソースの比較で決める(保存中の編集を未保存のまま残すため)
+      const dirty = state.source !== normalizeNewlines(savedSource);
+      if (dirty === state.document.dirty && nextName === state.document.fileName) {
         return;
       }
-      commit({ ...state, document: { ...state.document, dirty: false, fileName: nextName } });
+      commit({ ...state, document: { ...state.document, dirty, fileName: nextName } });
     },
 
     replaceDocument({ source, fileName, lossy }) {

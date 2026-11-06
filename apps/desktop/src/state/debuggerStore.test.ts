@@ -675,3 +675,31 @@ describe("クライアント通知 ClientNotice(UI が検出した拒否も oper
     expect(debuggerReducer(noticed, { type: "pauseRequested" })).toBe(noticed);
   });
 });
+
+describe("通知の追加 noticeAdded(実行ループの状態を変えない。文書フローの失敗・情報通知に使う)", () => {
+  it.each(PHASES)("%s では通知を置き換え、画面状態・セッション・error・局所 Pause を変えない", (phase) => {
+    const before = inPhase(phase);
+    const s = apply(before, { type: "noticeAdded", notice: IO_ERR });
+    expect(s.phase).toBe(before.phase);
+    expect(s.sessionId).toBe(before.sessionId);
+    expect(s.state).toBe(before.state);
+    expect(s.error).toBe(before.error);
+    expect(s.localPaused).toBe(before.localPaused);
+    expect(s.notices).toEqual([IO_ERR]);
+  });
+
+  it("実行中の失敗通知(operationFailed)と違い、実行を待機へ戻さない", () => {
+    const s = apply(runningState(), { type: "noticeAdded", notice: IO_ERR });
+    expect(s.phase).toBe("running");
+  });
+
+  it("情報通知(置換読み込み)も通知として追加する", () => {
+    const s = apply(started(), { type: "noticeAdded", notice: { kind: "client", code: "lossyReplaced" } });
+    expect(s.notices).toEqual([{ kind: "client", code: "lossyReplaced" }]);
+  });
+
+  it("直前の通知は置き換える(最新の 1 件だけを保持する)", () => {
+    const s = apply(inPhase("idle"), { type: "noticeAdded", notice: IO_ERR }, { type: "noticeAdded", notice: SESSION_ERR });
+    expect(s.notices).toEqual([SESSION_ERR]);
+  });
+});

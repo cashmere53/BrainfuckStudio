@@ -8,10 +8,12 @@
 // - RunController は効果(useEffect)で作り、アンマウントで必ず dispose する(StrictMode の二重マウントでも
 //   古いコントローラの購読と予約を残さない)。
 // - 派生値(操作の有効/無効・状態ラベル・エディタの強調)は domain / editor の純粋関数に任せ、ここでは組み立てない。
-// - ファイル操作(新規・開く・保存)と各ショートカットは 8.2 で接続する。8.1 では押せる見た目だけを置く。
+// - ファイル操作(新規・開く・保存・閉じる)は documentFlow が、ショートカットは shortcuts が受け持ち、ここで配線する(8.2)。
+//   どちらも操作の有効/無効は `controls`(availability)に従う。
 
 import "./DebuggerScreen.css";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { InputPanel } from "../components/InputPanel";
 import { NoticeList } from "../components/NoticeList";
@@ -28,7 +30,9 @@ import { editorDisplayOf } from "../editor/editorDisplay";
 import { tauriBackend, type Backend } from "../ipc/backend";
 import { debuggerReducer, initialDebuggerState, type DebuggerAction, type DebuggerState } from "../state/debuggerStore";
 import { createRunController, type RunController, type RunHost } from "../state/runController";
-import { useWorkspace, workspaceStore, type WorkspaceStore } from "../state/workspace";
+import { useWorkspace, workspaceStore, type DocumentState, type WorkspaceStore } from "../state/workspace";
+import { CONFIRM_TEXT, createDocumentFlow, type DocumentFlow, type PendingConfirm } from "./documentFlow";
+import { useShortcuts } from "./shortcuts";
 
 export interface DebuggerScreenProps {
   /** 実行のバックエンド。既定は本物の IPC(テストでは偽バックエンドを注入する) */
@@ -82,6 +86,9 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
 
   const editorRef = useRef<SourceEditorHandle>(null);
   const controllerRef = useRef<RunController | null>(null);
+  const flowRef = useRef<DocumentFlow | null>(null);
+  // 確認ダイアログの対象(未保存の変更を破棄する操作)。null なら表示しない
+  const [pending, setPending] = useState<PendingConfirm | null>(null);
 
   // 実行制御の生成と破棄。StrictMode の二重マウントでは、最初のコントローラを破棄してから作り直す
   useEffect(() => {
@@ -95,6 +102,23 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
     };
   }, [backend, workspace, host]);
 
+  // 文書操作の生成と破棄(同じく StrictMode の作り直しに対応する)。失敗と成功の通知は表示状態の通知へ流す
+  useEffect(() => {
+    const flow = createDocumentFlow({
+      backend,
+      workspace,
+      notify: (notice) => host.dispatch({ type: "noticeAdded", notice }),
+      setPending,
+    });
+    flowRef.current = flow;
+    return () => {
+      flow.dispose();
+      if (flowRef.current === flow) {
+        flowRef.current = null;
+      }
+    };
+  }, [backend, workspace, host]);
+
   const inputValid = parseInput(snapshot.input).ok;
   const ui: UiState & { stoppedByPause: boolean } = {
     phase: display.phase,
@@ -103,21 +127,70 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
   };
   const controls = availability(ui);
 
+  // ショートカット(要件 14.1)。操作が無効なら発火しない。確認の表示中は modal のため受けない。
+  // F9 は入力欄からの入力では切り替えない(入力欄の中の F9 を奪わない)
+  useShortcuts((id, event) => {
+    if (pending !== null) return;
+    const controller = controllerRef.current;
+    const flow = flowRef.current;
+    switch (id) {
+      case "run":
+        if (controls.run) void controller?.run();
+        return;
+      case "pause":
+        if (controls.pause) void controller?.pause();
+        return;
+      case "step":
+        if (controls.step) void controller?.step();
+        return;
+      case "reset":
+        if (controls.reset) void controller?.reset();
+        return;
+      case "toggleBreakpoint":
+        if (controls.edit && !isTextEntry(event.target)) editorRef.current?.toggleBreakpointAtCursor();
+        return;
+      case "new":
+        if (controls.edit) void flow?.requestNew();
+        return;
+      case "open":
+        if (controls.edit) void flow?.requestOpen();
+        return;
+      case "save":
+        if (controls.edit) void flow?.save(false);
+        return;
+      case "saveAs":
+        if (controls.edit) void flow?.save(true);
+        return;
+    }
+  });
+
+  const confirmText = CONFIRM_TEXT[pending ?? "new"];
+
   return (
     <div className="debugger-screen">
       <div className="debugger-area debugger-area-toolbar">
-        {/* ファイル操作(新規・開く・保存)は 8.2 で接続する */}
         <Toolbar
           controls={controls}
           onRun={() => void controllerRef.current?.run()}
           onPause={() => void controllerRef.current?.pause()}
           onStep={() => void controllerRef.current?.step()}
           onReset={() => void controllerRef.current?.reset()}
-          onNew={noop}
-          onOpen={noop}
-          onSave={noop}
-          onSaveAs={noop}
+          onNew={() => void flowRef.current?.requestNew()}
+          onOpen={() => void flowRef.current?.requestOpen()}
+          onSave={() => void flowRef.current?.save(false)}
+          onSaveAs={() => void flowRef.current?.save(true)}
           onClearBreakpoints={() => editorRef.current?.clearBreakpoints()}
+        />
+        <p className="document-status" data-testid="document-status" aria-live="polite">
+          {documentStatusText(snapshot.document)}
+        </p>
+        <ConfirmDialog
+          open={pending !== null}
+          title={confirmText.title}
+          message={confirmText.message}
+          confirmLabel={confirmText.confirmLabel}
+          onConfirm={() => void flowRef.current?.confirmPending()}
+          onCancel={() => flowRef.current?.cancelPending()}
         />
       </div>
 
@@ -169,6 +242,15 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
   );
 }
 
-function noop(): void {
-  // 8.2 で接続するまでの既定(押せるが何もしない)
+/** 文書の状態の表示文(ファイル名・未保存の変更。要件 2.2・2.5)。ファイル名はディレクトリを含まない */
+function documentStatusText(document: DocumentState): string {
+  const name = document.fileName ?? "無題";
+  return document.dirty ? `${name}(未保存の変更あり)` : name;
+}
+
+/** 入力欄(テキスト入力・選択)の中か。F9 を入力欄の操作として残すための判定 */
+function isTextEntry(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+  );
 }

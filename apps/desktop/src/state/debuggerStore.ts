@@ -71,6 +71,8 @@ export type DebuggerAction =
   | { type: "parseFailed"; error: ParseErrorDto }
   // `error` は通知の値(バックエンドの ApiError または UI の ClientNotice)。名前は既存の呼び出しに合わせて据え置く
   | { type: "operationFailed"; error: Notice }
+  // 通知だけを追加する(文書フローの失敗・情報通知)。実行ループの状態は変えない(phase・error・セッション・出力を保つ)
+  | { type: "noticeAdded"; notice: Notice }
   | { type: "invalidated" }
   | { type: "scrollConsumed" };
 
@@ -175,6 +177,10 @@ export function debuggerReducer(s: DebuggerState, action: DebuggerAction): Debug
         return { ...s, phase: "idle", localPaused: false, notices: [action.error] };
       }
       return { ...s, notices: [action.error] };
+
+    case "noticeAdded":
+      // 通知は最新の 1 件に置き換える。実行中・停止中でも phase と error は変えない(operationFailed と違い、実行ループを止めない)
+      return { ...s, notices: [action.notice] };
 
     case "invalidated":
       // 実行中は編集不可(要件 5.10)のため、実行中の無効化は起きない。起きても無視する
