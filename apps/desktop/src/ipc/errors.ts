@@ -67,13 +67,30 @@ export function isSessionInvalidating(error: ApiError): boolean {
 // I/O の文面は Rust 側 `ApiError::io` が作る形: `failed to <read|write> file: <OS の文>`
 const IO_MESSAGE = /^failed to (read|write) file: (.+)$/;
 
+/**
+ * backend の invalidArgument の項目名(`crates/brainfuck-gui-api/src/service.rs` の `invalid(...)` の引数)と
+ * 画面に出す日本語の項目名の対応。ここに無い項目名は表示しない(Map で検索し、プロトタイプの名前を引かない)。
+ */
+const FIELD_LABEL_JA: ReadonlyMap<string, string> = new Map([
+  ["batchSize", "バッチ幅"],
+  ["tapeRadius", "テープの表示半径"],
+  ["radius", "テープの表示半径"],
+  ["offsets", "ブレークポイント"],
+  ["breakpointOffsets", "ブレークポイント"],
+  ["maxSteps", "命令数上限"],
+  ["inputBase64", "入力"],
+]);
+
 /** 種類とフィールドから日本語の通知文を組み立てる */
 export function apiErrorMessageJa(error: ApiError): string {
   switch (error.kind) {
-    case "invalidArgument":
-      return error.field === null
+    case "invalidArgument": {
+      // 既知の項目だけ日本語の項目名で示す。未知の項目名は backend の内部名を出さないため示さない(要件 1.5)
+      const label = error.field === null ? undefined : FIELD_LABEL_JA.get(error.field);
+      return label === undefined
         ? "入力の値が不正です。内容を確認してください"
-        : `入力の値が不正です(項目: ${error.field})。内容を確認してください`;
+        : `入力の値が不正です(項目: ${label})。内容を確認してください`;
+    }
     case "sessionNotFound":
       return "実行セッションが見つかりません。最初から実行し直してください";
     case "programNotLoaded":

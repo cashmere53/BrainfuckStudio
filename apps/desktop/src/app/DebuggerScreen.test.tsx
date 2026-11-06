@@ -426,3 +426,39 @@ describe("DebuggerScreen: クライアント側の拒否の通知(要件 3.7・6
     expect(notices.textContent).not.toMatch(/breakpoint|field/);
   });
 });
+
+describe("DebuggerScreen: 実行中の文書の同期失敗(要件 10.7・10.10)", () => {
+  it("実行中に未保存フラグの同期が失敗しても、状態ラベルは「実行中」のままで、通知として表示する", async () => {
+    const hold: { release?: (result: BatchResultDto) => void } = {};
+    const { backend, workspace } = renderScreen(
+      helloScript({
+        runBatch: () =>
+          new Promise<BatchResultDto>((resolve) => {
+            hold.release = resolve;
+          }),
+        setDocumentDirty: () => {
+          throw { kind: "io", message: "failed to write file: denied", field: null };
+        },
+      }),
+    );
+    fireEvent.click(runButton());
+    await waitFor(() => {
+      expect(countOf(backend, "runBatch")).toBe(1);
+    });
+
+    // 実行中は編集できないが、Workspace の値が変われば(別経路の更新)同期が試みられる
+    act(() => workspace.setSource("+"));
+    await flush();
+
+    expect(screen.getByTestId("status-label").textContent).toBe("実行中");
+    expect(screen.getByLabelText("通知").textContent).toContain("ファイルの書き込みに失敗しました");
+    expect(document.querySelector(".error-banner")).toBeNull();
+
+    hold.release?.({
+      stop: { kind: "halted" },
+      executed: 1,
+      state: stateDto(1, { halted: true, lastStop: "halted" }),
+    });
+    expect(await screen.findByText("正常終了")).toBeTruthy();
+  });
+});

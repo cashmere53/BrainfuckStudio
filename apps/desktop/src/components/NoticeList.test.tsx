@@ -29,10 +29,20 @@ describe("NoticeList(要件 10.7・2.11)", () => {
     expect(alert.textContent).toContain("指定されたファイルが見つかりません。 (os error 2)");
   });
 
-  it("不正な要求の項目名を含めて表示する", () => {
-    const notice: ApiError = { kind: "invalidArgument", message: "invalid", field: "maxSteps" };
+  it.each([
+    ["batchSize", "バッチ幅"],
+    ["tapeRadius", "テープの表示半径"],
+    ["radius", "テープの表示半径"],
+    ["offsets", "ブレークポイント"],
+    ["breakpointOffsets", "ブレークポイント"],
+    ["maxSteps", "命令数上限"],
+    ["inputBase64", "入力"],
+  ])("不正な要求の項目 %s を日本語の項目名で表示し、backend の項目名は表示しない(要件 1.5)", (field, label) => {
+    const notice: ApiError = { kind: "invalidArgument", message: "invalid", field };
     render(<NoticeList notices={[notice]} />);
-    expect(screen.getByRole("alert").textContent).toContain("項目: maxSteps");
+    const text = screen.getByRole("alert").textContent ?? "";
+    expect(text).toContain(`項目: ${label}`);
+    expect(text).not.toContain(field);
   });
 
   it("複数の通知を順序どおりに並べる", () => {

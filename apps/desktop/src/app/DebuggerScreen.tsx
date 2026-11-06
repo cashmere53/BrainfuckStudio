@@ -167,7 +167,8 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
   const confirmText = CONFIRM_TEXT[pending ?? "new"];
 
   return (
-    <div className="debugger-screen">
+    <main className="debugger-screen">
+      <h1 className="visually-hidden">Brainfuck デバッガ</h1>
       <div className="debugger-area debugger-area-toolbar">
         <Toolbar
           controls={controls}
@@ -181,7 +182,8 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
           onSaveAs={() => void flowRef.current?.save(true)}
           onClearBreakpoints={() => editorRef.current?.clearBreakpoints()}
         />
-        <p className="document-status" data-testid="document-status" aria-live="polite">
+        {/* 読み上げ領域(aria-live)は状態ラベル(StatusPanel)だけに付ける。ここは文書の表示のみ */}
+        <p className="document-status" data-testid="document-status">
           {documentStatusText(snapshot.document)}
         </p>
         <ConfirmDialog
@@ -238,7 +240,7 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
         <ErrorBanner error={display.error} />
         <NoticeList notices={display.notices} />
       </div>
-    </div>
+    </main>
   );
 }
 

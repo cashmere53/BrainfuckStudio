@@ -39,6 +39,25 @@
   font-weight: 700;
 }
 
+/* キーボード操作のフォーカス表示(全操作共通)。マウス操作では出さない(:focus-visible) */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 画面の見出しなど、視覚表示しないが支援技術には見せる要素 */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body {
   margin: 0;

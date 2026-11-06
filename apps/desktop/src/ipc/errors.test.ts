@@ -74,10 +74,33 @@ describe("apiErrorMessageJa: 種類とフィールドから日本語の通知文
     expect(apiErrorMessageJa({ kind: "fileTooLarge", message: "", field: null })).toContain("1 MiB");
   });
 
-  it("invalidArgument は不正だった項目名を示す(項目が無ければ示さない)", () => {
-    expect(apiErrorMessageJa({ kind: "invalidArgument", message: "", field: "batchSize" })).toContain(
-      "batchSize",
-    );
+  it("invalidArgument は backend の項目名を日本語の項目名に対応付けて示す(要件 1.5)", () => {
+    const expected: Record<string, string> = {
+      batchSize: "バッチ幅",
+      tapeRadius: "テープの表示半径",
+      radius: "テープの表示半径",
+      offsets: "ブレークポイント",
+      breakpointOffsets: "ブレークポイント",
+      maxSteps: "命令数上限",
+      inputBase64: "入力",
+    };
+    for (const [field, label] of Object.entries(expected)) {
+      const text = apiErrorMessageJa({ kind: "invalidArgument", message: "", field });
+      // 「項目: 〇〇」まで照合する(fallback 文「入力の値が不正です…」に label の一部が含まれても通さない)
+      expect(text, field).toContain(`項目: ${label}`);
+      expect(text, field).toMatch(JAPANESE);
+      expect(text, field).not.toContain(field);
+    }
+  });
+
+  it("未知の項目名は画面に出さない(項目名も「項目:」の表示も含めない)", () => {
+    const text = apiErrorMessageJa({ kind: "invalidArgument", message: "", field: "someInternalField" });
+    expect(text).toMatch(JAPANESE);
+    expect(text).not.toContain("someInternalField");
+    expect(text).not.toContain("項目");
+  });
+
+  it("項目が無い invalidArgument は項目の表示を含めない", () => {
     expect(apiErrorMessageJa({ kind: "invalidArgument", message: "", field: null })).not.toContain("項目");
   });
 
