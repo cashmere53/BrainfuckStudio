@@ -10,6 +10,15 @@ import { DEFAULT_STEP_LIMIT_TEXT, parseStepLimit, type LimitedStepLimit } from "
 
 export type OutputMode = "text" | "hex";
 
+/**
+ * 改行を LF に統一する。取り込んだサンプルや開いたファイルは CRLF を含みうる(core.autocrlf)が、
+ * エディタ(CodeMirror)は LF で保持するため、ここで揃えないと文書とソースが一致せず、実行対象もずれる(要件 7.8, design の LF 正規化)。
+ * 5.2 の範囲外の変更だが、リポジトリ全体へ影響する .gitattributes を足さずに済むよう、入口(Workspace)で最小限に対処する。
+ */
+export function normalizeNewlines(source: string): string {
+  return source.replace(/\r\n?/g, "\n");
+}
+
 export type DocumentState = {
   /** 紐づいているファイル名(ディレクトリを含まない)。新規文書は null */
   fileName: string | null;
@@ -67,7 +76,7 @@ export type WorkspaceStore = {
 
 function initialState(): WorkspaceState {
   return {
-    source: getHelloSource(),
+    source: normalizeNewlines(getHelloSource()),
     document: { fileName: null, dirty: false, lossyNotice: false },
     input: { mode: "text", text: "" },
     limit: {
@@ -104,10 +113,11 @@ export function createWorkspace(): WorkspaceStore {
     },
 
     setSource(source) {
-      if (source === state.source) {
+      const normalized = normalizeNewlines(source);
+      if (normalized === state.source) {
         return;
       }
-      commit({ ...state, source, document: { ...state.document, dirty: true } });
+      commit({ ...state, source: normalized, document: { ...state.document, dirty: true } });
     },
 
     markSaved(fileName) {
@@ -123,7 +133,7 @@ export function createWorkspace(): WorkspaceStore {
       // 置換は「文書の置換」というイベントなので、内容が同じでも無変更ガードは置かず常に通知する。
       commit({
         ...state,
-        source,
+        source: normalizeNewlines(source),
         document: { fileName, dirty: false, lossyNotice: lossy },
         breakpoints: [],
         documentRevision: state.documentRevision + 1,

@@ -15,7 +15,8 @@ describe("createWorkspace: 初期状態", () => {
   it("起動時のソースは取り込んだ Hello World サンプルと一致し、未保存でもファイル名もない", () => {
     const ws = createWorkspace();
     const state = ws.getSnapshot();
-    expect(state.source).toBe(getHelloSource());
+    expect(state.source).toBe(getHelloSource().replace(/\r\n?/g, "\n"));
+    expect(state.source).not.toContain("\r");
     expect(state.document).toEqual({ fileName: null, dirty: false, lossyNotice: false });
   });
 
@@ -184,7 +185,7 @@ describe("useWorkspace(読み取り用フック)", () => {
   it("ストアの変更で再描画され、最新のスナップショットを返す", () => {
     const ws = createWorkspace();
     const { result } = renderHook(() => useWorkspace(ws));
-    expect(result.current.source).toBe(getHelloSource());
+    expect(result.current.source).toBe(getHelloSource().replace(/\r\n?/g, "\n"));
     act(() => {
       ws.setSource("+");
     });
@@ -292,6 +293,35 @@ describe("置換イベントは同じ内容でも必ず 1 回通知する", () =
     ws.newDocument();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(ws.getSnapshot()).not.toBe(before);
+  });
+});
+
+describe("改行の正規化(ソースは LF に統一する)", () => {
+  it("replaceDocument は CRLF と CR を LF に正規化して保持する", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: "+\r\n-\r.", fileName: "a.bf", lossy: false });
+    expect(ws.getSnapshot().source).toBe("+\n-\n.");
+  });
+
+  it("newDocument は空のソースのまま正規化の対象外で、置換回数は進む", () => {
+    const ws = createWorkspace();
+    ws.newDocument();
+    expect(ws.getSnapshot().source).toBe("");
+    expect(ws.getSnapshot().documentRevision).toBe(1);
+  });
+
+  it("setSource も同じ正規化を通し、正規化後に同じ内容なら変更通知を出さない", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: "+\n-", fileName: null, lossy: false });
+    const listener = vi.fn();
+    ws.subscribe(listener);
+    ws.setSource("+\r\n-");
+    expect(listener).not.toHaveBeenCalled();
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+    ws.setSource("+\r\n-+");
+    expect(ws.getSnapshot().source).toBe("+\n-+");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });
 

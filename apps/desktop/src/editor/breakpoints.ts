@@ -53,6 +53,8 @@ const breakpointCharMark = Decoration.mark({ class: "cm-breakpoint-char" });
 const toggleEffect = StateEffect.define<number>();
 /** 全解除 */
 const clearEffect = StateEffect.define<null>();
+/** 外部(ワークスペース)からの集合の置換。命令でない位置は除く */
+const setEffect = StateEffect.define<readonly number[]>();
 
 function isInstructionAt(doc: Text, from: number): boolean {
   return from >= 0 && from < doc.length && INSTRUCTION_CHARS.includes(doc.sliceString(from, from + 1));
@@ -86,6 +88,13 @@ const breakpointField = StateField.define<DecorationSet>({
     for (const effect of tr.effects) {
       if (effect.is(clearEffect)) {
         next = Decoration.none;
+      } else if (effect.is(setEffect)) {
+        const doc = tr.state.doc;
+        const targets = [...new Set(effect.value)].filter((pos) => isInstructionAt(doc, pos));
+        next = Decoration.set(
+          targets.map((pos) => breakpointCharMark.range(pos, pos + 1)),
+          true,
+        );
       } else if (effect.is(toggleEffect)) {
         const pos = effect.value;
         if (!isInstructionAt(tr.state.doc, pos)) {
@@ -148,6 +157,10 @@ function gutterMarkers(state: EditorState): RangeSet<GutterMarker> {
 
 /** 位置 `pos`(null なら命令なし)に対する切替。受理なら true */
 function applyToggle(view: EditorView, pos: number | null): boolean {
+  // 読み取り専用(実行中・一時停止処理中)は切替を受け付けない(停止中の切替のみ。要件 6.11)
+  if (view.state.readOnly) {
+    return false;
+  }
   if (pos === null) {
     view.state.facet(handlersFacet).onRejected("noInstruction");
     return false;
@@ -171,6 +184,15 @@ export function clearAllBreakpoints(view: EditorView): void {
     return;
   }
   view.dispatch({ effects: clearEffect.of(null) });
+}
+
+/**
+ * 集合をワークスペース側の値へ合わせる(外部からの置換)。命令でない位置は取り除く。
+ * 読み取り専用でも適用する(実行開始時の未解決位置の除去などプログラムからの同期のため)。
+ * 変化があったときだけ onChange が呼ばれる(呼び出し側は更新中に呼ばないこと)。
+ */
+export function setBreakpointOffsets(view: EditorView, offsets: readonly number[]): void {
+  view.dispatch({ effects: setEffect.of([...offsets]) });
 }
 
 const breakpointTheme = EditorView.baseTheme({

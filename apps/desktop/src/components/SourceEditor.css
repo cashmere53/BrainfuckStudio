@@ -1,0 +1,19 @@
+/* ソースエディタの外枠。高さは親の領域いっぱいに広げ、内部のスクロールはエディタ自身が持つ */
+.source-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.source-editor .cm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 14px;
+}
+
+.source-editor .cm-scroller {
+  overflow: auto;
+}
