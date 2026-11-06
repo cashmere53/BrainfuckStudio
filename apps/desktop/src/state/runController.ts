@@ -3,7 +3,11 @@
 // 表示状態は `host`(useReducer の dispatch/getState に相当)へ action として流す。React に依存しない。
 //
 // 方針:
-// - コマンドは `enqueue` で直列に発行する(Pause だけが追い越す。Pause は 5.6 で追加する)。
+// - コマンドは `enqueue` で直列に発行する。Pause だけが追い越す(5.6): 局所フラグを立ててから backend の pause を
+//   キューの外で直接呼ぶ。backend の pause はロックを取らないため、run_batch の実行中でも待たされない。
+// - Run(5.6): 停止理由が batchReached かつ待機中でない限りバッチを反復する。バッチ幅は往復時間で適応する
+//   (batchPolicy)。表示は描画フレームへ間引き、停止時は最終応答を必ず反映する。ループは描画を待たない
+//   (隠れたウィンドウで描画が止まっても進行する)。
 // - 無効化の世代(`generation`): 編集・文書置換・セッション無効化のたびに進める。要求の発行時の世代と
 //   応答時の世代が違えば、その応答は破棄する(破棄後に届いた古い応答が表示を書き換えないため)。
 //   応答の sessionId は reducer でも照合する(二重の防御)。
@@ -14,11 +18,14 @@
 //   ブレークポイントは置換コマンドで同期し、テープ半径は窓だけを取り直す。
 
 import type { ApiError } from "../generated/ApiError";
+import type { BatchResultDto } from "../generated/BatchResultDto";
 import type { SessionStateDto } from "../generated/SessionStateDto";
 import type { StepLimitDto } from "../generated/StepLimitDto";
+import { nextBatchSize } from "../domain/batchPolicy";
 import { encodeBase64 } from "../domain/base64";
 import { parseInput } from "../domain/inputBytes";
-import { MAX_SOURCE_BYTES } from "../domain/limits";
+import { DEFAULT_BATCH_SIZE, MAX_SOURCE_BYTES } from "../domain/limits";
+import { applyChunk, type OutputBuffer } from "../domain/outputBuffer";
 import type { Backend } from "../ipc/backend";
 import { isSessionInvalidating, normalizeApiError } from "../ipc/errors";
 import type { DebuggerAction, DebuggerState } from "./debuggerStore";
@@ -30,21 +37,52 @@ export type RunHost = {
   dispatch(action: DebuggerAction): void;
 };
 
+/** 描画フレームの予約口。戻り値は予約の取り消し。テストでは手動の実装を注入する */
+export type FrameScheduler = {
+  request(callback: () => void): () => void;
+};
+
 export type RunControllerDeps = {
   backend: Backend;
   workspace: WorkspaceStore;
   host: RunHost;
+  /** 単調増加の時刻(ms)。バッチの往復時間に使う。既定は performance.now */
+  now?: () => number;
+  /** 描画の間引きに使うフレーム予約。既定は requestAnimationFrame(無ければタイマー) */
+  frames?: FrameScheduler;
 };
 
 export type RunController = {
   /** セッションが無ければ開始する。開始できたら true(解析エラー・入力不正・失敗では false) */
   ensureSession(): Promise<boolean>;
+  /** 停止するまでバッチを反復する(セッションが無ければ先に開始する)。待機中以外では発行しない */
+  run(): Promise<void>;
+  /** 実行中のバッチを一時停止する。キューを追い越して即時に発行する。実行中以外は何もしない */
+  pause(): Promise<void>;
   /** 1 命令実行する。セッションが無ければ先に開始する */
   step(): Promise<void>;
   /** セッションを初期状態へ戻す(ブレークポイントは保持)。セッションが無ければ何もしない */
   reset(): Promise<void>;
   /** Workspace の購読を解除する */
   dispose(): void;
+};
+
+/** 既定のフレーム予約: requestAnimationFrame。無い環境ではタイマーで代用する */
+const defaultFrames: FrameScheduler = {
+  request(callback) {
+    if (typeof requestAnimationFrame === "function") {
+      const id = requestAnimationFrame(() => {
+        callback();
+      });
+      return () => {
+        cancelAnimationFrame(id);
+      };
+    }
+    const id = setTimeout(callback, 16);
+    return () => {
+      clearTimeout(id);
+    };
+  },
 };
 
 /** ソースの UTF-8 バイト数(上限検査に使う) */
@@ -80,18 +118,40 @@ function executionInputsChanged(before: WorkspaceState, next: WorkspaceState): b
   );
 }
 
-export function createRunController({ backend, workspace, host }: RunControllerDeps): RunController {
+export function createRunController({
+  backend,
+  workspace,
+  host,
+  now = () => performance.now(),
+  frames = defaultFrames,
+}: RunControllerDeps): RunController {
   const dispatch = (action: DebuggerAction): void => host.dispatch(action);
 
   // 無効化の世代。無効化のたびに進め、要求時の世代と違う応答は捨てる
   let generation = 0;
   // バックエンドが受理済みのブレークポイント集合(セッションごと)。同じ集合の再送を避ける(冪等)
   let synced: { sessionId: number; offsets: number[] } | null = null;
+  // 次のバッチの命令数。往復時間で適応し、無効化で既定へ戻す
+  let batchSize: number = DEFAULT_BATCH_SIZE;
+  // 予約中の描画フレームの取り消し(Run ループが予約する。停止・破棄で取り消す)
+  let cancelFrame: (() => void) | null = null;
+  // Run ループが動いているか(Pause の失敗を、ループの停止時に反映するか即時に反映するかの判定に使う)
+  let loopActive = false;
+  // 実行中の Pause の RPC 失敗(ループが止まった時点で、最終応答の反映の後に反映する)
+  let pauseFailure: ApiError | null = null;
 
-  // セッションを未開始へ戻す(世代を進め、同期状態を捨てる)
+  const dropFrame = (): void => {
+    if (cancelFrame !== null) {
+      cancelFrame();
+      cancelFrame = null;
+    }
+  };
+
+  // セッションを未開始へ戻す(世代を進め、同期状態と適応値を捨てる)
   const invalidate = (): void => {
     generation += 1;
     synced = null;
+    batchSize = DEFAULT_BATCH_SIZE;
     dispatch({ type: "invalidated" });
   };
 
@@ -257,31 +317,187 @@ export function createRunController({ backend, workspace, host }: RunControllerD
       }
     });
 
-  // ブレークポイント同期: 現在のセッションへ現在の集合を置換として送る。受理済みと同じなら送らない(冪等)
+  // ブレークポイント同期(キューの中で呼ぶ): 現在のセッションへ現在の集合を置換として送る。
+  // 受理済みと同じなら送らない(冪等)。失敗・無効化なら false(呼び出し側は実行を始めない)
+  const syncBreakpointsNow = async (): Promise<boolean> => {
+    const sessionId = host.getState().sessionId;
+    if (sessionId === null) {
+      return true;
+    }
+    const requested = [...workspace.getSnapshot().breakpoints];
+    if (synced !== null && synced.sessionId === sessionId && sameNumbers(synced.offsets, requested)) {
+      return true;
+    }
+    const gen = generation;
+    try {
+      const result = await backend.setBreakpoints({ sessionId, offsets: requested });
+      if (gen !== generation) {
+        return false;
+      }
+      acceptBreakpoints(sessionId, requested, result.unresolved);
+      return true;
+    } catch (rejection: unknown) {
+      if (gen !== generation) {
+        return false;
+      }
+      failOperation(normalizeApiError(rejection));
+      return false;
+    }
+  };
+
   const syncBreakpoints = (): Promise<void> =>
     enqueue(async () => {
-      const sessionId = host.getState().sessionId;
-      if (sessionId === null) {
-        return;
-      }
-      const requested = [...workspace.getSnapshot().breakpoints];
-      if (synced !== null && synced.sessionId === sessionId && sameNumbers(synced.offsets, requested)) {
-        return;
-      }
-      const gen = generation;
-      try {
-        const result = await backend.setBreakpoints({ sessionId, offsets: requested });
-        if (gen !== generation) {
-          return;
-        }
-        acceptBreakpoints(sessionId, requested, result.unresolved);
-      } catch (rejection: unknown) {
-        if (gen !== generation) {
-          return;
-        }
-        failOperation(normalizeApiError(rejection));
-      }
+      await syncBreakpointsNow();
     });
+
+  // Run のループ(キューの中で呼ぶ)。停止理由が batchReached かつ待機中でない限り、次のバッチを発行する。
+  // 出力の不変条件: 次に要求する outputFrom は `accepted`(受理済みの出力の末尾)。画面の反映は間引くため
+  // 画面の末尾より先行しうるが、要求は受理済みの末尾から行うので、未反映の応答と重ならない。
+  // 表示: 応答の出力は `accepted` に積み、描画フレームで「画面の末尾より後」だけを 1 つのチャンクにして送る。
+  // 停止(batchReached 以外・一時停止・失敗)では最終応答を必ず反映する。フレームはループの進行を待たない。
+  const runLoop = async (sessionId: number): Promise<void> => {
+    const gen = generation;
+    // 受理済みの出力(画面の末尾より先行しうる)。初期値は画面の出力
+    let accepted: OutputBuffer = host.getState().output;
+    // 画面へまだ反映していない最新の応答(状態・停止理由の反映に使う)
+    let latest: BatchResultDto | null = null;
+    loopActive = true;
+
+    // 未反映の応答を画面へ送る。画面の末尾から先の出力だけを連続のチャンクとして送る。
+    // 画面の末尾が保持範囲より前なら保持範囲の全体を送る(不連続 → 置換。省略は truncated で示す)。
+    // 世代が変わっていれば捨てる(破棄後の応答を表示へ書き込まない)
+    const flushPending = (): void => {
+      if (latest === null) {
+        return;
+      }
+      const result = latest;
+      latest = null;
+      if (gen !== generation) {
+        return;
+      }
+      const shown = host.getState().output;
+      const from = shown.end >= accepted.bufferStart && shown.end <= accepted.end ? shown.end : accepted.bufferStart;
+      const bytes = accepted.bytes.slice(from - accepted.bufferStart);
+      dispatch({
+        type: "batchResult",
+        result: {
+          ...result,
+          state: {
+            ...result.state,
+            output: { dataStart: from, totalLen: accepted.totalLen, dataBase64: encodeBase64(bytes) },
+          },
+        },
+      });
+    };
+
+    const onFrame = (): void => {
+      cancelFrame = null;
+      // 一時停止処理中の途中応答は送らない(停止時の最終応答で反映する。途中で止めると後続の応答が捨てられるため)
+      if (latest !== null && host.getState().phase === "running") {
+        flushPending();
+      }
+    };
+
+    try {
+      for (;;) {
+        if (gen !== generation) {
+          return;
+        }
+        const size = batchSize;
+        const snapshot = workspace.getSnapshot();
+        const started = now();
+        let result: BatchResultDto;
+        try {
+          result = await backend.runBatch({
+            sessionId,
+            batchSize: size,
+            view: { tapeRadius: snapshot.tapeRadius, outputFrom: accepted.end },
+          });
+        } catch (rejection: unknown) {
+          if (gen !== generation) {
+            return;
+          }
+          // 失敗より前の応答を先に反映してから、失敗を反映する(一時停止の失敗は実行の失敗に譲る)
+          dropFrame();
+          flushPending();
+          pauseFailure = null;
+          failOperation(normalizeApiError(rejection));
+          return;
+        }
+        if (gen !== generation) {
+          return;
+        }
+        batchSize = nextBatchSize(size, now() - started);
+        accepted = applyChunk(accepted, result.state.output);
+        latest = result;
+
+        // 停止: バッチ到達以外の停止理由、一時停止処理中(Pause が届いたため次を発行しない)、
+        // または Pause の RPC が失敗した(一時停止できなかったため、ここで止めて失敗を示す)
+        if (result.stop.kind !== "batchReached" || host.getState().phase !== "running" || pauseFailure !== null) {
+          dropFrame();
+          flushPending();
+          if (pauseFailure !== null) {
+            const error = pauseFailure;
+            pauseFailure = null;
+            failOperation(error);
+          }
+          return;
+        }
+        if (cancelFrame === null) {
+          cancelFrame = frames.request(onFrame);
+        }
+      }
+    } finally {
+      dropFrame();
+      latest = null;
+      loopActive = false;
+    }
+  };
+
+  // Run: 待機中でなければ何もしない。開始 → ブレークポイント同期 → ループ(5.5 の同期の後に実行する)
+  const run = (): Promise<void> =>
+    enqueue(async () => {
+      if (host.getState().phase === "noSession" && !(await startSession())) {
+        return;
+      }
+      if (host.getState().phase !== "idle") {
+        return;
+      }
+      // ブレークポイントの同期に失敗したら実行しない(次の Run で同じ集合を再送する)
+      if (!(await syncBreakpointsNow())) {
+        return;
+      }
+      const current = host.getState();
+      if (current.phase !== "idle" || current.sessionId === null) {
+        return;
+      }
+      // 開始の反映: 実行中の表示へ切り替える(局所フラグ・通知・エラーは Run で下ろす)
+      dispatch({ type: "runStarted" });
+      await runLoop(current.sessionId);
+    });
+
+  // Pause: キューを追い越して即時に発行する。局所フラグを先に立て、backend の pause はロックを取らないため
+  // run_batch の実行中でも待たされない。実行中以外・セッションが無い場合は何もしない。
+  const pause = async (): Promise<void> => {
+    const current = host.getState();
+    if (current.phase !== "running" || current.sessionId === null) {
+      return;
+    }
+    const sessionId = current.sessionId;
+    dispatch({ type: "pauseRequested" });
+    try {
+      await backend.pause({ sessionId });
+    } catch (rejection: unknown) {
+      const error = normalizeApiError(rejection);
+      // 実行ループが動いていれば、ループが止まった時点で最終応答を反映してから失敗を示す(表示の順序を保つ)。
+      // ループが既に終わっていれば、ここで直接示す
+      if (loopActive) {
+        pauseFailure = error;
+      } else {
+        failOperation(error);
+      }
+    }
+  };
 
   // テープ窓の再取得: 半径の変更で窓だけを取り直す。セッションは破棄しない
   const refreshWindow = (): Promise<void> =>
@@ -323,5 +539,12 @@ export function createRunController({ backend, workspace, host }: RunControllerD
     }
   });
 
-  return { ensureSession, step, reset, dispose: unsubscribe };
+  // 破棄: 購読を解除し、世代を進めて進行中の応答を捨て、予約中の描画を取り消す
+  const dispose = (): void => {
+    unsubscribe();
+    generation += 1;
+    dropFrame();
+  };
+
+  return { ensureSession, run, pause, step, reset, dispose };
 }

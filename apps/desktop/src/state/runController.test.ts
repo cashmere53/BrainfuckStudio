@@ -11,8 +11,14 @@ import { createFakeBackend, type FakeScript } from "../ipc/fakeBackend";
 import { encodeBase64 } from "../domain/base64";
 import { MAX_SOURCE_BYTES, DEFAULT_MAX_STEPS } from "../domain/limits";
 import { debuggerReducer, initialDebuggerState, type DebuggerAction, type DebuggerState } from "./debuggerStore";
-import { createRunController } from "./runController";
+import type { BatchResultDto } from "../generated/BatchResultDto";
+import type { BatchStopDto } from "../generated/BatchStopDto";
+import type { OutputChunkDto } from "../generated/OutputChunkDto";
+import type { RunBatchRequest } from "../generated/RunBatchRequest";
+import { createRunController, type RunControllerDeps } from "./runController";
 import { createWorkspace, type WorkspaceStore } from "./workspace";
+
+type RunOptions = Partial<Pick<RunControllerDeps, "now" | "frames">>;
 
 const PARSE_ERR: ParseErrorDto = {
   kind: "unmatchedOpeningBracket",
@@ -70,11 +76,11 @@ function makeHost() {
   };
 }
 
-function setup(script: FakeScript = okScript()) {
+function setup(script: FakeScript = okScript(), options: RunOptions = {}) {
   const backend = createFakeBackend(script);
   const workspace = createWorkspace();
   const host = makeHost();
-  const controller = createRunController({ backend, workspace, host });
+  const controller = createRunController({ backend, workspace, host, ...options });
   return { backend, workspace, host, controller };
 }
 
@@ -791,5 +797,508 @@ describe("RunController: 出力モードの切替", () => {
     expect(host.getState().phase).toBe("idle");
     expect(host.getState().sessionId).toBe(1);
     expect(backend.calls).toHaveLength(callCount);
+  });
+});
+
+const INTERNAL_ERR: ApiError = { kind: "internal", message: "temporary", field: null };
+const WINDOW: TapeWindowDto = { start: -5, cells: Array.from({ length: 11 }, () => 0), pointerOffset: 5 };
+
+/** 手動のフレーム: 描画の要求を溜め、テストが flush() で発火させる(ループはフレームを待たない) */
+function manualFrames() {
+  let queue: Array<() => void> = [];
+  return {
+    request(callback: () => void): () => void {
+      queue.push(callback);
+      return () => {
+        queue = queue.filter((pending) => pending !== callback);
+      };
+    },
+    flush(): void {
+      const pending = queue;
+      queue = [];
+      for (const callback of pending) {
+        callback();
+      }
+    },
+    get pending(): number {
+      return queue.length;
+    },
+  };
+}
+
+/** 呼ばれるたびに与えた値を順に返す時計(経過時間を決定的にする) */
+function scriptedClock(values: readonly number[]): () => number {
+  let index = 0;
+  return () => {
+    const value = values[index];
+    index += 1;
+    if (value === undefined) {
+      throw new Error("clock exhausted");
+    }
+    return value;
+  };
+}
+
+/** バッチの応答(セッション 1)。`halted` の停止のときだけ停止状態の DTO にする */
+function batchDto(steps: number, stop: BatchStopDto, output?: OutputChunkDto): BatchResultDto {
+  const base = stateDto(1, steps, stop.kind === "halted");
+  return { stop, executed: 1, state: output === undefined ? base : { ...base, output } };
+}
+
+/** Run 系の台本: Pause とテープ窓の既定応答を足す */
+function runScript(overrides: FakeScript = {}): FakeScript {
+  return okScript({ pause: () => undefined, getTapeWindow: () => WINDOW, ...overrides });
+}
+
+/** Run 系の検査用セットアップ(手動フレーム・注入可能な時計) */
+function runSetup(overrides: FakeScript = {}, now: () => number = () => 0) {
+  const frames = manualFrames();
+  const script = runScript(overrides);
+  const responder = script.runBatch;
+  let calls = 0;
+  // 安全弁: ループが暴走しても無限に発行せず、上限を超えたら失敗させる(ワーカーが積み続けて停止しないため)
+  script.runBatch = (req) => {
+    calls += 1;
+    if (calls > MAX_RUN_BATCH_CALLS) {
+      throw new Error(`runBatch が安全弁の上限 ${MAX_RUN_BATCH_CALLS} 回を超えた`);
+    }
+    if (responder === undefined) {
+      throw new Error("runBatch の台本がない");
+    }
+    return responder(req);
+  };
+  return { ...setup(script, { now, frames }), frames };
+}
+
+/** 安全弁: 1 テストで許す runBatch の最大呼び出し数 */
+const MAX_RUN_BATCH_CALLS = 200;
+
+/** 全出力 `all` のうち [from, to) を、要求の outputFrom から始まる差分チャンクにする(実バックエンドと同じ形) */
+function outputChunk(all: Uint8Array, from: number, to: number): OutputChunkDto {
+  return { dataStart: from, totalLen: all.length, dataBase64: encodeBase64(all.slice(from, to)) };
+}
+
+describe("RunController: Run ループ", () => {
+  it("バッチ到達の間は自動で続け、halted で止まる(描画を待たず、状態の取得も発行しない)", async () => {
+    const responses = [
+      batchDto(1000, { kind: "batchReached" }),
+      batchDto(2000, { kind: "batchReached" }),
+      batchDto(2500, { kind: "halted" }),
+    ];
+    const { backend, host, controller } = runSetup({ runBatch: () => responses.shift() as BatchResultDto });
+
+    await controller.run();
+
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(3);
+    expect(methods(backend)).not.toContain("getSnapshot");
+    expect(host.getState().phase).toBe("halted");
+    expect(host.getState().state?.snapshot.stepsExecuted).toBe(2500);
+    expect(host.getState().localPaused).toBe(false);
+  });
+
+  it("ブレークポイントで止まると待機へ戻り、Run をもう一度発行すると続きを要求する", async () => {
+    const responses = [batchDto(10, { kind: "breakpoint" }), batchDto(20, { kind: "halted" })];
+    const { backend, host, controller } = runSetup({ runBatch: () => responses.shift() as BatchResultDto });
+
+    await controller.run();
+    expect(host.getState().phase).toBe("idle");
+    expect(host.getState().error).toBeNull();
+
+    await controller.run();
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(2);
+    expect(host.getState().phase).toBe("halted");
+  });
+
+  it("実行エラーで止まると failed になり、実行エラーとして保持する", async () => {
+    const error = { kind: "stepLimitExceeded" as const, limit: 5000, pc: 3 };
+    const { host, controller } = runSetup({
+      runBatch: () => batchDto(5000, { kind: "error", error }),
+    });
+
+    await controller.run();
+
+    expect(host.getState().phase).toBe("failed");
+    expect(host.getState().error).toEqual({ category: "runtime", error });
+  });
+
+  it("停止済み(halted)の画面では Run を発行しない", async () => {
+    const { backend, controller } = runSetup({ runBatch: () => batchDto(1, { kind: "halted" }) });
+
+    await controller.run();
+    await controller.run();
+
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(1);
+  });
+
+  it("バッチ幅は往復時間で適応する(15 ms 未満で倍加、60 ms 超で半減、その間は据え置き)", async () => {
+    const sizes: number[] = [];
+    const responses = [
+      batchDto(1000, { kind: "batchReached" }),
+      batchDto(2000, { kind: "batchReached" }),
+      batchDto(3000, { kind: "batchReached" }),
+      batchDto(4000, { kind: "halted" }),
+    ];
+    const { controller } = runSetup(
+      {
+        runBatch: (req: RunBatchRequest) => {
+          sizes.push(req.batchSize ?? -1);
+          return responses.shift() as BatchResultDto;
+        },
+      },
+      // 1 バッチごとに (開始, 終了) の順で読む: 10 ms → 100 ms → 30 ms → 0 ms
+      scriptedClock([0, 10, 0, 100, 0, 30, 0, 0]),
+    );
+
+    await controller.run();
+
+    expect(sizes).toEqual([1000, 2000, 1000, 1000]);
+  });
+
+  it("各バッチで現在のテープ半径を渡す(Run の途中で変えた値が次のバッチに反映される)", async () => {
+    const radii: number[] = [];
+    const ctx: ReturnType<typeof runSetup> = runSetup({
+      runBatch: (req: RunBatchRequest) => {
+        radii.push(req.view.tapeRadius);
+        if (radii.length === 1) {
+          ctx.workspace.setTapeRadius(5);
+          return batchDto(1000, { kind: "batchReached" });
+        }
+        return batchDto(2000, { kind: "halted" });
+      },
+    });
+
+    await ctx.controller.run();
+
+    expect(radii).toEqual([16, 5]);
+  });
+
+  it("表示は描画フレームで間引く: 途中の応答は省き、フレームで最新の応答を反映し、停止時は最終応答を必ず反映する", async () => {
+    let stepsBeforeFrame: number | undefined;
+    let stepsAfterFrame: number | undefined;
+    const ctx: ReturnType<typeof runSetup> = runSetup({
+      runBatch: (() => {
+        let call = 0;
+        return () => {
+          call += 1;
+          if (call === 1) return batchDto(1000, { kind: "batchReached" });
+          if (call === 2) {
+            // フレームがまだ来ていないため、表示は開始時の状態のまま
+            stepsBeforeFrame = ctx.host.getState().state?.snapshot.stepsExecuted;
+            return batchDto(2000, { kind: "batchReached" });
+          }
+          if (call === 3) {
+            // フレームで届いた時点の最新(2 回目の応答)が反映される
+            ctx.frames.flush();
+            stepsAfterFrame = ctx.host.getState().state?.snapshot.stepsExecuted;
+            return batchDto(3000, { kind: "batchReached" });
+          }
+          return batchDto(4000, { kind: "halted" });
+        };
+      })(),
+    });
+
+    await ctx.controller.run();
+
+    expect(stepsBeforeFrame).toBe(0);
+    expect(stepsAfterFrame).toBe(2000);
+    expect(ctx.host.getState().state?.snapshot.stepsExecuted).toBe(4000);
+    // 反映は「フレーム 1 回 + 停止時の最終応答 1 回」の 2 回だけ
+    expect(ctx.host.dispatched.filter((action) => action.type === "batchResult")).toHaveLength(2);
+    expect(ctx.frames.pending).toBe(0);
+  });
+
+  it("描画フレームが実行中バッチと重なっても出力の先頭を失わない(未反映の応答を含む末尾から要求する)", async () => {
+    const ALL = Uint8Array.of(65, 66, 67, 68);
+    const outputFrom: number[] = [];
+    const ctx: ReturnType<typeof runSetup> = runSetup({
+      runBatch: (req: RunBatchRequest) => {
+        const from = req.view.outputFrom;
+        outputFrom.push(from);
+        if (outputFrom.length === 1) {
+          return batchDto(1000, { kind: "batchReached" }, outputChunk(ALL, 0, 2));
+        }
+        if (outputFrom.length === 2) {
+          // 要求の後・応答の前に描画フレームが来る: 1 回目の応答(未反映)が画面へ反映され、画面の末尾は 2 になる
+          ctx.frames.flush();
+          return batchDto(2000, { kind: "batchReached" }, outputChunk(ALL, from, 3));
+        }
+        return batchDto(3000, { kind: "halted" }, outputChunk(ALL, from, 4));
+      },
+    });
+
+    await ctx.controller.run();
+
+    // 2 回目は画面の末尾(0)ではなく、受理済みの末尾(2)から要求する。3 回目は受理済みの末尾 3 から要求する
+    expect(outputFrom).toEqual([0, 2, 3]);
+    expect(ctx.host.getState().output.bytes).toEqual(ALL);
+    expect(ctx.host.getState().output.bufferStart).toBe(0);
+    expect(ctx.host.getState().output.totalLen).toBe(4);
+    expect(ctx.host.getState().output.truncated).toBe(false);
+  });
+
+  it("runBatch の失敗の直前に未反映の応答があれば、その応答を反映してから失敗を出す", async () => {
+    const ALL = Uint8Array.of(65, 66, 67);
+    const ctx: ReturnType<typeof runSetup> = runSetup({
+      runBatch: (() => {
+        let call = 0;
+        return (req: RunBatchRequest) => {
+          call += 1;
+          if (call === 1) {
+            return batchDto(1000, { kind: "batchReached" }, outputChunk(ALL, req.view.outputFrom, 2));
+          }
+          // 1 回目の応答は描画フレームが来ていないため未反映のまま
+          return Promise.reject(IO_ERR);
+        };
+      })(),
+    });
+
+    await ctx.controller.run();
+
+    expect(ctx.frames.pending).toBe(0);
+    expect(ctx.host.getState().output.bytes).toEqual(Uint8Array.of(65, 66));
+    expect(ctx.host.getState().state?.snapshot.stepsExecuted).toBe(1000);
+    expect(ctx.host.getState().notices).toEqual([IO_ERR]);
+    expect(ctx.host.getState().phase).toBe("idle");
+  });
+
+  it("出力の差分は受理済みの末尾から要求し、停止時に総バイト数まで揃える(表示の末尾が遅れていても)", async () => {
+    const ALL = Uint8Array.of(65, 66, 67, 68, 69);
+    const outputFrom: number[] = [];
+    const ctx: ReturnType<typeof runSetup> = runSetup({
+      runBatch: (req: RunBatchRequest) => {
+        outputFrom.push(req.view.outputFrom);
+        if (outputFrom.length === 1) {
+          return batchDto(1000, { kind: "batchReached" }, outputChunk(ALL, 0, 2));
+        }
+        if (outputFrom.length === 2) {
+          return batchDto(2000, { kind: "batchReached" }, outputChunk(ALL, req.view.outputFrom, 4));
+        }
+        return batchDto(3000, { kind: "halted" }, outputChunk(ALL, req.view.outputFrom, 5));
+      },
+    });
+
+    await ctx.controller.run();
+
+    // フレームが来ないため、画面の末尾は 0 のままでも、要求は受理済みの末尾 2 → 4 と進む
+    expect(outputFrom).toEqual([0, 2, 4]);
+    expect(ctx.host.getState().output.bytes).toEqual(ALL);
+    expect(ctx.host.getState().output.totalLen).toBe(5);
+    expect(ctx.host.getState().output.end).toBe(5);
+  });
+});
+
+describe("RunController: Pause", () => {
+  it("実行中バッチの途中で Pause すると、局所フラグを立てて pause を直接呼び、cancelled で一時停止になる", async () => {
+    const gate = deferred<BatchResultDto>();
+    const { backend, host, controller } = runSetup({ runBatch: () => gate.promise });
+
+    const running = controller.run();
+    await flush();
+    expect(host.getState().phase).toBe("running");
+
+    const paused = controller.pause();
+    expect(host.getState().phase).toBe("pausing");
+    expect(host.getState().localPaused).toBe(true);
+    await paused;
+    expect(backend.calls.at(-1)).toEqual({ method: "pause", args: [{ sessionId: 1 }] });
+
+    gate.resolve(batchDto(500, { kind: "cancelled" }));
+    await running;
+
+    expect(host.getState().phase).toBe("idle");
+    expect(host.getState().localPaused).toBe(true);
+    expect(host.getState().state?.snapshot.stepsExecuted).toBe(500);
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(1);
+  });
+
+  it("Pause が届いた後に batchReached で戻った場合は次のバッチを発行せず、一時停止で止まる", async () => {
+    const gate = deferred<BatchResultDto>();
+    const { backend, host, controller } = runSetup({ runBatch: () => gate.promise });
+
+    const running = controller.run();
+    await flush();
+    void controller.pause();
+    gate.resolve(batchDto(1000, { kind: "batchReached" }));
+    await running;
+
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(1);
+    expect(host.getState().phase).toBe("idle");
+    expect(host.getState().localPaused).toBe(true);
+    expect(host.getState().state?.snapshot.stepsExecuted).toBe(1000);
+  });
+
+  it("Pause 後の Run は停止位置から続きを要求し、セッションを開始し直さない", async () => {
+    const gate = deferred<BatchResultDto>();
+    let call = 0;
+    const { backend, host, controller } = runSetup({
+      runBatch: () => {
+        call += 1;
+        return call === 1 ? gate.promise : batchDto(900, { kind: "halted" });
+      },
+    });
+
+    const running = controller.run();
+    await flush();
+    void controller.pause();
+    gate.resolve(batchDto(500, { kind: "cancelled" }));
+    await running;
+
+    await controller.run();
+
+    expect(methods(backend).filter((method) => method === "startSession")).toHaveLength(1);
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(2);
+    expect(host.getState().phase).toBe("halted");
+    expect(host.getState().localPaused).toBe(false);
+  });
+
+  it("Pause の RPC が失敗しても、実行中のバッチが戻って止まるまで失敗を示さず、止まった時点で最終応答の反映の後に示す", async () => {
+    const ALL = Uint8Array.of(65, 66);
+    const gate = deferred<BatchResultDto>();
+    let call = 0;
+    const { host, controller } = runSetup({
+      pause: () => Promise.reject(IO_ERR),
+      runBatch: (req: RunBatchRequest) => {
+        call += 1;
+        return call === 1 ? gate.promise : batchDto(9999, { kind: "halted" }, outputChunk(ALL, req.view.outputFrom, 2));
+      },
+    });
+
+    const running = controller.run();
+    await flush();
+    await controller.pause();
+
+    // バッチの途中では失敗を示さない(一時停止処理中のまま)
+    expect(host.getState().phase).toBe("pausing");
+    expect(host.getState().notices).toEqual([]);
+
+    gate.resolve(batchDto(1000, { kind: "batchReached" }, outputChunk(ALL, 0, 2)));
+    await running;
+
+    // 次のバッチは発行されず、最終応答(出力を含む)が反映されてから失敗が示される
+    expect(call).toBe(1);
+    expect(host.getState().phase).toBe("idle");
+    expect(host.getState().state?.snapshot.stepsExecuted).toBe(1000);
+    expect(host.getState().output.bytes).toEqual(ALL);
+    expect(host.getState().notices).toEqual([IO_ERR]);
+  });
+
+  it("dispose は予約中の描画を取り消し、取り消し後に届いた応答を画面へ反映せず、次のバッチも発行しない", async () => {
+    const gate = deferred<BatchResultDto>();
+    let call = 0;
+    const { host, controller, frames } = runSetup({
+      runBatch: () => {
+        call += 1;
+        return call === 1 ? batchDto(1000, { kind: "batchReached" }) : gate.promise;
+      },
+    });
+
+    const running = controller.run();
+    await flush();
+    expect(frames.pending).toBe(1);
+
+    controller.dispose();
+    expect(frames.pending).toBe(0);
+
+    // 破棄の後に届いた応答: 画面へは反映せず、ループも次のバッチを発行しない
+    gate.resolve(batchDto(2000, { kind: "batchReached" }));
+    await running;
+    // 破棄の後は描画を予約し直さない
+    expect(frames.pending).toBe(0);
+    frames.flush();
+
+    expect(call).toBe(2);
+    expect(host.getState().state?.snapshot.stepsExecuted).toBe(0);
+    expect(host.dispatched.filter((action) => action.type === "batchResult")).toHaveLength(0);
+  });
+
+  it("待機中の Pause は何も発行しない", async () => {
+    const { backend, controller } = runSetup();
+    await controller.ensureSession();
+    const callCount = backend.calls.length;
+
+    await controller.pause();
+
+    expect(backend.calls).toHaveLength(callCount);
+  });
+});
+
+describe("RunController: 実行中の操作失敗(failOperation の実行中分岐)", () => {
+  it("実行中の IO エラーは待機へ戻し、局所フラグを下ろし、通知を残してセッションを保つ", async () => {
+    const { host, controller } = runSetup({ runBatch: () => Promise.reject(IO_ERR) });
+    await controller.ensureSession();
+    const before = host.dispatched.length;
+
+    await controller.run();
+
+    expect(host.dispatched.slice(before).map((action) => action.type)).toEqual(["runStarted", "operationFailed"]);
+    expect(host.getState().phase).toBe("idle");
+    expect(host.getState().localPaused).toBe(false);
+    expect(host.getState().notices).toEqual([IO_ERR]);
+    expect(host.getState().sessionId).toBe(1);
+  });
+
+  it("実行中に sessionNotFound が返ると、操作失敗 → 無効化 → 操作失敗 の順で未開始へ戻る", async () => {
+    const { host, controller } = runSetup({ runBatch: () => Promise.reject(SESSION_ERR) });
+    await controller.ensureSession();
+    const before = host.dispatched.length;
+
+    await controller.run();
+
+    expect(host.dispatched.slice(before).map((action) => action.type)).toEqual([
+      "runStarted",
+      "operationFailed",
+      "invalidated",
+      "operationFailed",
+    ]);
+    expect(host.getState().phase).toBe("noSession");
+    expect(host.getState().sessionId).toBeNull();
+    expect(host.getState().notices).toEqual([SESSION_ERR]);
+  });
+
+  it("一時停止処理中(pausing)に sessionNotFound が返っても、同じ順で未開始へ戻る", async () => {
+    const gate = deferred<BatchResultDto>();
+    const { host, controller } = runSetup({ runBatch: () => gate.promise });
+    await controller.ensureSession();
+    const before = host.dispatched.length;
+
+    const running = controller.run();
+    await flush();
+    const paused = controller.pause();
+    gate.reject(SESSION_ERR);
+    await Promise.all([running, paused]);
+
+    expect(host.dispatched.slice(before).map((action) => action.type)).toEqual([
+      "runStarted",
+      "pauseRequested",
+      "operationFailed",
+      "invalidated",
+      "operationFailed",
+    ]);
+    expect(host.getState().phase).toBe("noSession");
+    expect(host.getState().localPaused).toBe(false);
+  });
+});
+
+describe("RunController: Run 開始時のブレークポイント同期", () => {
+  it("同期が一時的に失敗しても、次の Run の前に同じ集合を再送してから実行する", async () => {
+    let syncCalls = 0;
+    const { backend, workspace, controller } = runSetup({
+      setBreakpoints: () => {
+        syncCalls += 1;
+        if (syncCalls === 1) {
+          return Promise.reject(INTERNAL_ERR);
+        }
+        return { breakpoints: [], unresolved: [] };
+      },
+      runBatch: () => batchDto(1000, { kind: "halted" }),
+    });
+    await controller.ensureSession();
+
+    workspace.setBreakpoints([0]);
+    await flush();
+    await controller.run();
+
+    expect(methods(backend).slice(2)).toEqual(["setBreakpoints", "setBreakpoints", "runBatch"]);
+    expect(backend.calls.at(-2)).toEqual({ method: "setBreakpoints", args: [{ sessionId: 1, offsets: [0] }] });
   });
 });
