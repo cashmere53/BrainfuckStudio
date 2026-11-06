@@ -1,12 +1,12 @@
 // デバッガ表示状態のストア(reducer)。画面状態・セッション ID・プログラム ID・最新の状態 DTO・出力バッファ・
 // 実行/解析エラー(error)・操作の通知(notices)・局所 Pause フラグ・停止時のスクロール要求を保持する。
-// React/Tauri に依存しない純粋な reducer で、画面は useReducer(debuggerReducer, initialDebuggerState()) で使う。
+// React/Tauri に依存しない純粋な reducer。画面(DebuggerScreen)はこの reducer を外部ストア(useSyncExternalStore)の
+// 中で同期的に適用する。RunController が dispatch 直後に最新状態を読むため、React の非同期な dispatch は使わない。
 // 表は design.md「debuggerStore」「画面状態機械」「Error Strategy」と要件 1.3 / 7.2 / 8.7 / 10.1 / 10.7 / 10.8 に対応する。
 //
 // 不変条件: 画面状態機械で定められていない遷移(無効な操作・破棄済みセッションの応答など)は、
 // 状態を変えず同じ参照を返す。これにより購読側は無変更の応答で再描画しない。
 
-import type { ApiError } from "../generated/ApiError";
 import type { BatchResultDto } from "../generated/BatchResultDto";
 import type { ParseErrorDto } from "../generated/ParseErrorDto";
 import type { RuntimeErrorDto } from "../generated/RuntimeErrorDto";
@@ -14,6 +14,7 @@ import type { SessionStateDto } from "../generated/SessionStateDto";
 import type { StepResultDto } from "../generated/StepResultDto";
 import type { TapeWindowDto } from "../generated/TapeWindowDto";
 import type { UiPhase } from "../domain/controls";
+import type { Notice } from "../domain/notice";
 import { applyChunk, emptyOutput, type OutputBuffer } from "../domain/outputBuffer";
 
 /**
@@ -41,11 +42,11 @@ export type DebuggerState = {
   /** 実行結果のエラー(解析または実行)。無ければ null */
   error: DisplayError | null;
   /**
-   * 操作の通知(操作エラー)。最新の 1 件だけを保持する配列。
+   * 操作の通知(バックエンドの ApiError、または UI が検出した ClientNotice)。最新の 1 件だけを保持する配列。
    * 規則: 操作が失敗すると追加(直前の通知は置き換える)。次に受理された操作
    * (Run / Step / Reset / 開始 / 編集・無効化)で消える。`error` とは独立に維持される。
    */
-  notices: readonly ApiError[];
+  notices: readonly Notice[];
   /**
    * RunController の局所 Pause で止まったか(状態ラベル「一時停止」の判定に使う)。
    * Run・Step・Reset・編集・停止の確定(局所 Pause 以外の停止理由)で必ず下ろす。
@@ -68,7 +69,8 @@ export type DebuggerAction =
   | { type: "resetApplied"; state: SessionStateDto }
   | { type: "tapeWindowApplied"; sessionId: number; window: TapeWindowDto }
   | { type: "parseFailed"; error: ParseErrorDto }
-  | { type: "operationFailed"; error: ApiError }
+  // `error` は通知の値(バックエンドの ApiError または UI の ClientNotice)。名前は既存の呼び出しに合わせて据え置く
+  | { type: "operationFailed"; error: Notice }
   | { type: "invalidated" }
   | { type: "scrollConsumed" };
 

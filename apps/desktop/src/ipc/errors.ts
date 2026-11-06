@@ -5,6 +5,8 @@
 
 import type { ApiError } from "../generated/ApiError";
 import type { ApiErrorKind } from "../generated/ApiErrorKind";
+import type { SwitchRejectReason } from "../domain/inputBytes";
+import { isClientNotice, type ClientNotice, type Notice } from "../domain/notice";
 
 /** `ApiErrorKind` の全要素(生成型と一致させる。網羅は型で検査する) */
 export const API_ERROR_KINDS = [
@@ -99,3 +101,28 @@ function ioMessageJa(message: string): string {
   const operation = matched[1] === "read" ? "読み込み" : "書き込み";
   return `ファイルの${operation}に失敗しました(原因: ${matched[2] ?? ""})`;
 }
+
+/**
+ * 画面の通知の日本語文面(要件 10.7・3.7・6.3)。バックエンドの ApiError は `apiErrorMessageJa`、
+ * UI が検出したクライアント通知は種類ごとの固定文を使う。英語の項目名は出さない(要件 1.5)。
+ */
+export function noticeMessageJa(notice: Notice): string {
+  return isClientNotice(notice) ? clientNoticeMessageJa(notice) : apiErrorMessageJa(notice);
+}
+
+function clientNoticeMessageJa(notice: ClientNotice): string {
+  switch (notice.code) {
+    case "breakpointRejected":
+      return "この行(カーソル以降)に命令が無いため、ブレークポイントを設定できません";
+    case "inputSwitchRejected":
+      return SWITCH_REJECT_MESSAGE_JA[notice.reason];
+  }
+}
+
+/** 入力モードの切替(16 進 → テキスト)が拒否された理由ごとの文面 */
+const SWITCH_REJECT_MESSAGE_JA: Record<SwitchRejectReason, string> = {
+  notUtf8: "入力が UTF-8 として正しくないため、テキストに切り替えられません",
+  invalidChar: "16 進として解釈できないため(16 進数字・空白以外の文字が含まれています)、テキストに切り替えられません",
+  oddDigits: "16 進として解釈できないため(16 進数字の総数が奇数です)、テキストに切り替えられません",
+  tooLarge: "入力が 1 MiB を超えているため、テキストに切り替えられません",
+};

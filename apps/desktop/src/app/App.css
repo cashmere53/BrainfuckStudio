@@ -1,0 +1,28 @@
+/* 画面切替のタブ(画面が 2 つ以上あるときだけ描画される) */
+.app-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid currentColor;
+}
+
+.app-tab {
+  padding: 4px 12px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+}
+
+.app-tab[aria-selected="true"] {
+  border-color: currentColor;
+  font-weight: 600;
+}
+
+.app-tab:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

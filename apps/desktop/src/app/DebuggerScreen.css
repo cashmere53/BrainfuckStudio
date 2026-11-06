@@ -1,0 +1,48 @@
+/* デバッガ画面の領域配置。最小 800 × 600 は .app-shell が保証し、それより小さい場合は .app-shell がスクロールさせる */
+.debugger-screen {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 0.8fr) auto;
+  grid-template-areas:
+    "toolbar toolbar"
+    "editor input"
+    "editor tape"
+    "editor output"
+    "status status";
+  gap: 8px;
+  padding: 8px;
+  min-height: 100%;
+}
+
+.debugger-area {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.debugger-area-toolbar {
+  grid-area: toolbar;
+}
+
+.debugger-area-editor {
+  grid-area: editor;
+  display: flex;
+  flex-direction: column;
+}
+
+.debugger-area-input {
+  grid-area: input;
+}
+
+.debugger-area-tape {
+  grid-area: tape;
+}
+
+.debugger-area-output {
+  grid-area: output;
+}
+
+.debugger-area-status {
+  grid-area: status;
+}

@@ -20,9 +20,9 @@ export type InputError =
 export type ParseInputResult = { ok: true; bytes: Uint8Array } | { ok: false; error: InputError };
 
 /** モード切替の失敗理由。入力エラーの種類か、UTF-8 として不正であることを表す */
-export type SwitchModeResult =
-  | { ok: true; model: InputModel }
-  | { ok: false; reason: InputError["kind"] | "notUtf8" };
+export type SwitchRejectReason = InputError["kind"] | "notUtf8";
+
+export type SwitchModeResult = { ok: true; model: InputModel } | { ok: false; reason: SwitchRejectReason };
 
 const WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
 

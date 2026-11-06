@@ -646,3 +646,32 @@ describe("テープ窓の再取得 tapeWindowApplied(現在のセッションの
     expect(debuggerReducer(invalidated, { type: "tapeWindowApplied", sessionId: 7, window: newWindow })).toBe(invalidated);
   });
 });
+
+describe("クライアント通知 ClientNotice(UI が検出した拒否も operationFailed で扱う)", () => {
+  const BP_REJECTED = { kind: "client", code: "breakpointRejected" } as const;
+  const SWITCH_REJECTED = { kind: "client", code: "inputSwitchRejected", reason: "notUtf8" } as const;
+
+  it("ブレークポイントの拒否を通知として保持し、error を上書きしない", () => {
+    const before = apply(inPhase("failed"));
+    const s = apply(before, { type: "operationFailed", error: BP_REJECTED });
+    expect(s.notices).toEqual([BP_REJECTED]);
+    expect(s.error).toBe(before.error);
+  });
+
+  it("入力モード切替の拒否は理由を保持する(最新の 1 件だけ)", () => {
+    const s = apply(
+      started(),
+      { type: "operationFailed", error: BP_REJECTED },
+      { type: "operationFailed", error: SWITCH_REJECTED },
+    );
+    expect(s.notices).toEqual([SWITCH_REJECTED]);
+  });
+
+  it("次に受理された操作(Step)で消え、無変更の操作では同じ参照を保つ", () => {
+    const noticed = apply(started(), { type: "operationFailed", error: SWITCH_REJECTED });
+    const stepped = debuggerReducer(noticed, { type: "stepResult", result: { outcome: { kind: "executed" }, state: dto(7) } });
+    expect(stepped.notices).toEqual([]);
+    // 無効な操作(実行中の Step など)は通知を消さず、同じ参照を返す
+    expect(debuggerReducer(noticed, { type: "pauseRequested" })).toBe(noticed);
+  });
+});

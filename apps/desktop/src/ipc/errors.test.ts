@@ -6,8 +6,11 @@ import {
   apiErrorMessageJa,
   isApiError,
   isSessionInvalidating,
+  noticeMessageJa,
   normalizeApiError,
 } from "./errors";
+import type { SwitchRejectReason } from "../domain/inputBytes";
+import type { ClientNotice } from "../domain/notice";
 
 const JAPANESE = /[\u3040-\u30ff\u4e00-\u9fff]/;
 
@@ -110,5 +113,37 @@ describe("isSessionInvalidating: セッションの無効化を要する種類",
       isSessionInvalidating({ kind, message: "", field: null }),
     );
     expect(invalidating.sort()).toEqual(["sessionNotFound", "staleProgram"]);
+  });
+});
+
+describe("noticeMessageJa: ApiError とクライアント通知の文面(要件 3.7・6.3・1.5)", () => {
+  it("ApiError は apiErrorMessageJa と同じ文面にする", () => {
+    const error: ApiError = { kind: "io", message: "failed to write file: denied", field: null };
+    expect(noticeMessageJa(error)).toBe(apiErrorMessageJa(error));
+  });
+
+  it("ブレークポイントの拒否は「命令が無い」理由を日本語で示し、英語の項目名を含まない", () => {
+    const notice: ClientNotice = { kind: "client", code: "breakpointRejected" };
+    const text = noticeMessageJa(notice);
+    expect(text).toContain("命令が無い");
+    expect(text).toContain("ブレークポイント");
+    expect(text).not.toMatch(/breakpoint|invalid|input/);
+  });
+
+  it("入力モード切替の拒否は理由ごとに異なる日本語の文面を返す", () => {
+    const reasons: SwitchRejectReason[] = ["notUtf8", "invalidChar", "oddDigits", "tooLarge"];
+    const texts = reasons.map((reason) => noticeMessageJa({ kind: "client", code: "inputSwitchRejected", reason }));
+    for (const [index, text] of texts.entries()) {
+      expect(text, reasons[index]).toMatch(JAPANESE);
+      expect(text, reasons[index]).toContain("テキストに切り替えられません");
+      expect(text, reasons[index]).not.toMatch(/invalid|input|field|[a-z]{4,}/);
+    }
+    expect(new Set(texts).size).toBe(reasons.length);
+  });
+
+  it("UTF-8 として不正な 16 進入力(例: ff)は「正しくない」理由で示し、入力の値が不正という文面を使わない", () => {
+    const text = noticeMessageJa({ kind: "client", code: "inputSwitchRejected", reason: "notUtf8" });
+    expect(text).toContain("UTF-8 として正しくない");
+    expect(text).not.toContain("入力の値が不正");
   });
 });

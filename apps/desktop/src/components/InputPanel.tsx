@@ -1,6 +1,14 @@
 import "./InputPanel.css";
 import { useId } from "react";
-import { byteCount, type InputError, type InputMode, type InputModel, parseInput, switchMode } from "../domain/inputBytes";
+import {
+  byteCount,
+  type InputError,
+  type InputMode,
+  type InputModel,
+  parseInput,
+  type SwitchRejectReason,
+  switchMode,
+} from "../domain/inputBytes";
 import { MAX_INPUT_BYTES } from "../domain/limits";
 
 export interface InputPanelProps {
@@ -8,7 +16,7 @@ export interface InputPanelProps {
   /** 入力モデルが変わったとき(文字入力、モード切替の成功)に呼ばれる */
   onChange: (input: InputModel) => void;
   /** モード切替が拒否されたとき(16 進 → テキストで UTF-8 として不正など)に理由とともに呼ばれる。モードは変わらない */
-  onSwitchRejected: (reason: InputError["kind"] | "notUtf8") => void;
+  onSwitchRejected: (reason: SwitchRejectReason) => void;
   /** 入力の編集を止める(実行中など)。省略時は編集可能 */
   disabled?: boolean;
 }

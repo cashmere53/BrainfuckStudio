@@ -47,3 +47,31 @@ describe("NoticeList(要件 10.7・2.11)", () => {
     expect(items[1]?.textContent).toContain("内部エラーが発生しました");
   });
 });
+
+describe("NoticeList: クライアント通知(要件 3.7・6.3)", () => {
+  it("ブレークポイントの設定不可を、理由つきの日本語で role=alert の領域に表示する", () => {
+    render(<NoticeList notices={[{ kind: "client", code: "breakpointRejected" }]} />);
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("この行(カーソル以降)に命令が無いため、ブレークポイントを設定できません");
+    expect(alert.textContent).not.toContain("項目:");
+  });
+
+  it("入力モード切替の拒否の理由を表示する(16 進 → テキストの UTF-8 不正)", () => {
+    render(<NoticeList notices={[{ kind: "client", code: "inputSwitchRejected", reason: "notUtf8" }]} />);
+    expect(screen.getByRole("alert").textContent).toContain("入力が UTF-8 として正しくないため、テキストに切り替えられません");
+  });
+
+  it("ApiError とクライアント通知を混在させても順序どおりに並べる", () => {
+    render(
+      <NoticeList
+        notices={[
+          { kind: "client", code: "inputSwitchRejected", reason: "oddDigits" },
+          { kind: "programNotLoaded", message: "x", field: null },
+        ]}
+      />,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]?.textContent).toContain("16 進数字の総数が奇数です");
+    expect(items[1]?.textContent).toContain("プログラムが読み込まれていません");
+  });
+});
