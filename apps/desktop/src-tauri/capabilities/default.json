@@ -13,6 +13,11 @@
     "allow-get-snapshot",
     "allow-get-tape-window",
     "allow-set-breakpoints",
-    "allow-pause"
+    "allow-pause",
+    "allow-new-document",
+    "allow-open-source-file",
+    "allow-save-source-file",
+    "allow-set-document-dirty",
+    "allow-confirm-exit"
   ]
 }
