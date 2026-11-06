@@ -12,6 +12,7 @@ import type { ParseErrorDto } from "../generated/ParseErrorDto";
 import type { RuntimeErrorDto } from "../generated/RuntimeErrorDto";
 import type { SessionStateDto } from "../generated/SessionStateDto";
 import type { StepResultDto } from "../generated/StepResultDto";
+import type { TapeWindowDto } from "../generated/TapeWindowDto";
 import type { UiPhase } from "../domain/controls";
 import { applyChunk, emptyOutput, type OutputBuffer } from "../domain/outputBuffer";
 
@@ -65,6 +66,7 @@ export type DebuggerAction =
   | { type: "batchResult"; result: BatchResultDto }
   | { type: "stepResult"; result: StepResultDto }
   | { type: "resetApplied"; state: SessionStateDto }
+  | { type: "tapeWindowApplied"; sessionId: number; window: TapeWindowDto }
   | { type: "parseFailed"; error: ParseErrorDto }
   | { type: "operationFailed"; error: ApiError }
   | { type: "invalidated" }
@@ -151,6 +153,11 @@ export function debuggerReducer(s: DebuggerState, action: DebuggerAction): Debug
         // 未消費のスクロール要求は、リセットで表示が先頭に戻るため不要になる
         scrollRequest: false,
       };
+
+    case "tapeWindowApplied":
+      // テープ窓の再取得の応答。現在のセッションの窓だけを差し替える(破棄済みセッションの応答は捨てる)
+      if (s.state === null || s.sessionId !== action.sessionId) return s;
+      return { ...s, state: { ...s.state, tapeWindow: action.window } };
 
     case "parseFailed":
       // 解析エラーはセッション開始の途中(未開始の画面)でだけ起きる。画面状態機械の NoSession → NoSession

@@ -5,6 +5,7 @@ import type { OutputChunkDto } from "../generated/OutputChunkDto";
 import type { ParseErrorDto } from "../generated/ParseErrorDto";
 import type { SessionStateDto } from "../generated/SessionStateDto";
 import type { StepResultDto } from "../generated/StepResultDto";
+import type { TapeWindowDto } from "../generated/TapeWindowDto";
 import type { UiPhase } from "../domain/controls";
 import { encodeBase64 } from "../domain/base64";
 import { deriveRunLabel } from "../domain/runLabel";
@@ -595,5 +596,53 @@ describe("スクロール要求 scrollRequest", () => {
     const s = inPhase(phase);
     expect(s.scrollRequest).toBe(false);
     expect(debuggerReducer(s, { type: "scrollConsumed" })).toBe(s);
+  });
+});
+
+describe("テープ窓の再取得 tapeWindowApplied(現在のセッションの窓だけを差し替える)", () => {
+  const newWindow: TapeWindowDto = { start: -2, cells: [0, 1, 0, 0, 0], pointerOffset: 2 };
+
+  it("現在のセッションの窓だけを差し替え、ほかのフィールドは同じ値のまま保つ", () => {
+    const before = apply(breakpointState(), { type: "operationFailed", error: IO_ERR });
+    const after = debuggerReducer(before, { type: "tapeWindowApplied", sessionId: 7, window: newWindow });
+    expect(after).not.toBe(before);
+    expect(after.state).toEqual({ ...before.state, tapeWindow: newWindow });
+    expect(after.state?.snapshot).toBe(before.state?.snapshot);
+    expect(after.phase).toBe(before.phase);
+    expect(after.sessionId).toBe(before.sessionId);
+    expect(after.programId).toBe(before.programId);
+    expect(after.output).toBe(before.output);
+    expect(after.error).toBe(before.error);
+    expect(after.notices).toBe(before.notices);
+    expect(after.localPaused).toBe(before.localPaused);
+    expect(after.scrollRequest).toBe(before.scrollRequest);
+  });
+
+  it.each(["idle", "running", "pausing", "halted", "failed"] as const)(
+    "%s でも現在のセッションの窓なら差し替え、画面状態(phase・出力・フラグ)は変えない",
+    (phase) => {
+      const before = inPhase(phase);
+      const after = debuggerReducer(before, { type: "tapeWindowApplied", sessionId: 7, window: newWindow });
+      expect(after.state?.tapeWindow).toEqual(newWindow);
+      expect(after.phase).toBe(before.phase);
+      expect(after.localPaused).toBe(before.localPaused);
+      expect(after.scrollRequest).toBe(before.scrollRequest);
+      expect(after.output).toBe(before.output);
+    },
+  );
+
+  it.each(PHASES)("%s: sessionId が違う窓の応答は無視する(同じ参照)", (phase) => {
+    const s = inPhase(phase);
+    expect(debuggerReducer(s, { type: "tapeWindowApplied", sessionId: 6, window: newWindow })).toBe(s);
+  });
+
+  it("未開始(state が null)の状態では、ID が一致しても同じ参照を返す", () => {
+    const s = initialDebuggerState();
+    expect(debuggerReducer(s, { type: "tapeWindowApplied", sessionId: 7, window: newWindow })).toBe(s);
+  });
+
+  it("破棄後に届いた窓の応答は表示に反映されない(同じ参照)", () => {
+    const invalidated = apply(started(), { type: "invalidated" });
+    expect(debuggerReducer(invalidated, { type: "tapeWindowApplied", sessionId: 7, window: newWindow })).toBe(invalidated);
   });
 });

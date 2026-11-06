@@ -37,6 +37,11 @@ export type WorkspaceState = {
   outputMode: OutputMode;
   /** ブレークポイントの UTF-16 位置(昇順・重複なし) */
   breakpoints: number[];
+  /**
+   * 文書の置換(開く・新規)の回数。置換は内容が同じでも進むため、購読側は内容の比較に頼らず置換を検出できる
+   * (RunController が置換でセッションを破棄するために使う)。
+   */
+  documentRevision: number;
 };
 
 /** 後続画面がリクエスト導出関数の引数型に使う、ソース・入力・上限の 3 項目 */
@@ -73,6 +78,7 @@ function initialState(): WorkspaceState {
     tapeRadius: DEFAULT_TAPE_RADIUS,
     outputMode: "text",
     breakpoints: [],
+    documentRevision: 0,
   };
 }
 
@@ -120,6 +126,7 @@ export function createWorkspace(): WorkspaceStore {
         source,
         document: { fileName, dirty: false, lossyNotice: lossy },
         breakpoints: [],
+        documentRevision: state.documentRevision + 1,
       });
     },
 
@@ -130,6 +137,7 @@ export function createWorkspace(): WorkspaceStore {
         source: "",
         document: { fileName: null, dirty: false, lossyNotice: false },
         breakpoints: [],
+        documentRevision: state.documentRevision + 1,
       });
     },
 

@@ -321,3 +321,34 @@ describe("useWorkspace のスナップショットの安定性", () => {
     expect(result.current).toBe(second);
   });
 });
+
+describe("文書の置換回数 documentRevision(置換でだけ進む)", () => {
+  it("初期値は 0", () => {
+    expect(createWorkspace().getSnapshot().documentRevision).toBe(0);
+  });
+
+  it("replaceDocument と newDocument は同じ内容でも回数を 1 ずつ進める", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: ws.getSnapshot().source, fileName: null, lossy: false });
+    expect(ws.getSnapshot().documentRevision).toBe(1);
+    ws.newDocument();
+    expect(ws.getSnapshot().documentRevision).toBe(2);
+  });
+
+  const otherSetters: readonly [string, (ws: WorkspaceStore) => void][] = [
+    ["setSource", (ws) => ws.setSource("+")],
+    ["markSaved", (ws) => ws.markSaved("a.bf")],
+    ["setInput", (ws) => ws.setInput({ mode: "hex", text: "41" })],
+    ["setLimitText", (ws) => ws.setLimitText("500")],
+    ["setUnlimited", (ws) => ws.setUnlimited(true)],
+    ["setTapeRadius", (ws) => ws.setTapeRadius(3)],
+    ["setOutputMode", (ws) => ws.setOutputMode("hex")],
+    ["setBreakpoints", (ws) => ws.setBreakpoints([1])],
+  ];
+
+  it.each(otherSetters)("%s は回数を進めない", (_name, change) => {
+    const ws = createWorkspace();
+    change(ws);
+    expect(ws.getSnapshot().documentRevision).toBe(0);
+  });
+});
