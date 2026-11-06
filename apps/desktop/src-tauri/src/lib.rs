@@ -2,6 +2,7 @@
 
 pub mod app_state;
 pub mod commands;
+pub mod window;
 
 /// アプリを起動する。
 pub fn run() {
@@ -9,6 +10,7 @@ pub fn run() {
         // ダイアログは Rust 側からのみ使う。WebView への権限は capabilities で与えない。
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state::AppState::default())
+        .on_window_event(window::on_window_event)
         .invoke_handler(commands::invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running Brainfuck Studio");
