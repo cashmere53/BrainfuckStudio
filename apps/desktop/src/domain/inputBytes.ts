@@ -77,28 +77,39 @@ function parseText(value: string): ParseInputResult {
 }
 
 function parseHex(value: string): ParseInputResult {
-  const nibbles = new Uint8Array(value.length);
+  // 1 回目: 確保なしに不正文字を検出し、16 進数字の個数を数える(エラー優先順位は 不正文字 → 桁数の奇偶 → 上限)。
+  // 入力長に比例する領域は確保しない。
   let count = 0;
   for (let i = 0; i < value.length; i++) {
     if (WHITESPACE.has(value.charAt(i))) {
       continue;
     }
-    const nibble = hexNibble(value.charCodeAt(i));
-    if (nibble === null) {
+    if (hexNibble(value.charCodeAt(i)) === null) {
       return { ok: false, error: { kind: "invalidChar", index: i } };
     }
-    nibbles[count++] = nibble;
+    count++;
   }
   if (count % 2 !== 0) {
     return { ok: false, error: { kind: "oddDigits" } };
   }
-  const size = count / 2;
-  if (size > MAX_INPUT_BYTES) {
+  if (count / 2 > MAX_INPUT_BYTES) {
     return { ok: false, error: { kind: "tooLarge" } };
   }
-  const bytes = new Uint8Array(size);
-  for (let i = 0; i < size; i++) {
-    bytes[i] = ((nibbles[2 * i] ?? 0) << 4) | (nibbles[2 * i + 1] ?? 0);
+  // 2 回目: 出力だけを確保し、数字を 2 個ずつ詰める(検証済みのため必ず成功する)
+  const bytes = new Uint8Array(count / 2);
+  let out = 0;
+  let high = -1;
+  for (let i = 0; i < value.length; i++) {
+    if (WHITESPACE.has(value.charAt(i))) {
+      continue;
+    }
+    const nibble = hexNibble(value.charCodeAt(i)) ?? 0;
+    if (high < 0) {
+      high = nibble;
+    } else {
+      bytes[out++] = (high << 4) | nibble;
+      high = -1;
+    }
   }
   return { ok: true, bytes };
 }

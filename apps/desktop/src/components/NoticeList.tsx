@@ -19,9 +19,12 @@ export function NoticeList(props: NoticeListProps) {
     return null;
   }
 
-  const heading = notices.every((notice) => noticeSeverityOf(notice) === "info") ? "通知" : "操作エラー";
+  // 情報のみなら status(polite)で読み上げ、失敗を含むときだけ alert(assertive)にする(要件 2.12・10.7)
+  const isInfoOnly = notices.every((notice) => noticeSeverityOf(notice) === "info");
+  const heading = isInfoOnly ? "通知" : "操作エラー";
+  const liveRole = isInfoOnly ? { role: "status" as const, "aria-live": "polite" as const } : { role: "alert" as const };
   return (
-    <div className="notice-list" role="alert" aria-label="通知">
+    <div className="notice-list" {...liveRole} aria-label="通知">
       <p className="notice-list-heading">{heading}</p>
       <ul className="notice-list-items">
         {notices.map((notice, index) => (

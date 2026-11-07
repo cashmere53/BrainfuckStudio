@@ -144,7 +144,7 @@ describe("ショートカット: 文書操作(要件 2.5・2.8・2.9・14.1)", (
     press({ key: "o", ctrlKey: true });
     await flush();
 
-    expect(screen.getByRole("alert", { name: "通知" }).textContent).toContain("置換文字");
+    expect(screen.getByRole("status", { name: "通知" }).textContent).toContain("置換文字");
   });
 });
 

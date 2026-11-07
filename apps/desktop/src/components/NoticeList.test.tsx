@@ -89,9 +89,38 @@ describe("NoticeList: クライアント通知(要件 3.7・6.3)", () => {
 describe("NoticeList: 重要度による見出し(要件 2.12)", () => {
   it("成功・情報の通知(置換読み込み)は見出しを「通知」にし、操作エラーと見せない", () => {
     render(<NoticeList notices={[{ kind: "client", code: "lossyReplaced" }]} />);
-    const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("通知");
-    expect(alert.textContent).not.toContain("操作エラー");
+    const status = screen.getByRole("status", { name: "通知" });
+    expect(status.textContent).toContain("通知");
+    expect(status.textContent).not.toContain("操作エラー");
+    expect(status.textContent).toContain("置換文字");
+  });
+
+  it("情報のみの通知は role=status かつ aria-live=polite で、role=alert にしない(要件 2.12)", () => {
+    render(<NoticeList notices={[{ kind: "client", code: "lossyReplaced" }]} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    const status = screen.getByRole("status", { name: "通知" });
+    expect(status.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("失敗を含む通知は role=alert で、見出しは「操作エラー」(要件 10.7)", () => {
+    render(<NoticeList notices={[{ kind: "client", code: "breakpointRejected" }]} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    const alert = screen.getByRole("alert", { name: "通知" });
+    expect(alert.textContent).toContain("操作エラー");
+  });
+
+  it("情報と失敗が混在する場合は role=alert で、見出しは「操作エラー」", () => {
+    render(
+      <NoticeList
+        notices={[
+          { kind: "client", code: "lossyReplaced" },
+          { kind: "programNotLoaded", message: "x", field: null },
+        ]}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    const alert = screen.getByRole("alert", { name: "通知" });
+    expect(alert.textContent).toContain("操作エラー");
     expect(alert.textContent).toContain("置換文字");
   });
 });

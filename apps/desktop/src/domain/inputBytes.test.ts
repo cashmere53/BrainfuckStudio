@@ -98,6 +98,36 @@ describe("parseInput: hex mode", () => {
     expect(parseInput(hex(fits + "00"))).toEqual({ ok: false, error: { kind: "tooLarge" } });
   });
 
+  it("rejects a huge hex string (more than 2 MiB of digits) as tooLarge", () => {
+    const huge = "0".repeat(2 * MAX_INPUT_BYTES + 2);
+    expect(parseInput(hex(huge))).toEqual({ ok: false, error: { kind: "tooLarge" } });
+  });
+
+  it("reports an invalid character before the size limit even for a huge hex string", () => {
+    const huge = "0".repeat(2 * MAX_INPUT_BYTES + 2);
+    expect(parseInput(hex("4G" + huge))).toEqual({ ok: false, error: { kind: "invalidChar", index: 1 } });
+    expect(parseInput(hex(huge + "G"))).toEqual({
+      ok: false,
+      error: { kind: "invalidChar", index: 2 * MAX_INPUT_BYTES + 2 },
+    });
+  });
+
+  it("reports oddDigits before the size limit even for a huge odd-length hex string", () => {
+    const huge = "0".repeat(2 * MAX_INPUT_BYTES + 1);
+    expect(parseInput(hex(huge))).toEqual({ ok: false, error: { kind: "oddDigits" } });
+  });
+
+  it("accepts exactly 1 MiB of hex digits (with whitespace ignored) and decodes every byte", () => {
+    const exact = "ff ".repeat(MAX_INPUT_BYTES);
+    const result = parseInput(hex(exact));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.bytes.length).toBe(MAX_INPUT_BYTES);
+      expect(result.bytes[0]).toBe(0xff);
+      expect(result.bytes[MAX_INPUT_BYTES - 1]).toBe(0xff);
+    }
+  });
+
   it("accepts the bytes 0x00 and 0xFF", () => {
     expect(parseInput(hex("00 FF"))).toEqual({ ok: true, bytes: new Uint8Array([0x00, 0xff]) });
   });
