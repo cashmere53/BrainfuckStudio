@@ -1,6 +1,6 @@
 # 要件とテストの対応(desktop-gui)
 
-最終検証の状況(2026-11-07): 自動検証は GO 相当。実ウィンドウでの手動スモークは、1・3.1・Reset・4・13 を 2026-11-07 に実機で確認して合格(結果は README)。残りの項目は未実施のため **MANUAL_VERIFY_REQUIRED**(一部)。自動テストは `crates/brainfuck-gui-api/tests/`、`apps/desktop/src-tauri/tests/`、`apps/desktop/src/**/*.test.ts(x)` にあり、いずれもウィンドウを起動せずに成功する(結果は `apps/desktop/README.md` の「検証結果の記録」)。手動スモーク番号は同 README の「手動スモーク手順」の 1〜15 を指す。
+最終検証の状況(2026-11-07): 自動検証は GO 相当。実ウィンドウでの手動スモークは、1〜15 の実施可能な項目を 2026-11-07 に実機で確認して合格(結果は README)。ライトテーマ・高コントラスト・NVDA(14.1・14.2・14.4)と、1 秒以内の更新周期などの計測は未確認のため **MANUAL_VERIFY_REQUIRED**(一部)。自動テストは `crates/brainfuck-gui-api/tests/`、`apps/desktop/src-tauri/tests/`、`apps/desktop/src/**/*.test.ts(x)` にあり、いずれもウィンドウを起動せずに成功する(結果は `apps/desktop/README.md` の「検証結果の記録」)。手動スモーク番号は同 README の「手動スモーク手順」の 1〜15 を指す。
 
 ## 要件の領域とテストファイル
 
