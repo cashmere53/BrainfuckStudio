@@ -1,0 +1,21 @@
+/* 操作エラー・通知の表示のスタイル(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.notice-list {
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: 4px;
+  color: var(--color-fg);
+  font-family: system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+
+/* 見出しは「操作エラー」の文字で実行エラーと区別する */
+.notice-list-heading {
+  margin: 0 0 4px;
+  font-weight: 700;
+}
+
+.notice-list-items {
+  margin: 0;
+  padding-left: 1.25em;
+}

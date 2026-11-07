@@ -1,0 +1,44 @@
+.input-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input-panel-modes {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.input-panel-mode {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.input-panel-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 3.5em;
+  font-family: ui-monospace, Consolas, monospace;
+  resize: vertical;
+}
+
+.input-panel-text[aria-invalid="true"] {
+  border: 2px solid var(--color-fg);
+}
+
+.input-panel-text:disabled {
+  opacity: 0.6;
+}
+
+.input-panel-bytes,
+.input-panel-error {
+  margin: 0;
+  font-size: 0.9em;
+}
+
+/* 誤りは色だけでなく文言(「入力エラー:」)で伝える */
+.input-panel-error {
+  font-weight: 600;
+}

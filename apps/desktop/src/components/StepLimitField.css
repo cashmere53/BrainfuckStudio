@@ -1,0 +1,42 @@
+.step-limit-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.step-limit-input {
+  box-sizing: border-box;
+  width: 12em;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.step-limit-input[aria-invalid="true"] {
+  border: 2px solid var(--color-fg);
+}
+
+.step-limit-input:disabled {
+  opacity: 0.6;
+}
+
+.step-limit-unlimited {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.step-limit-error,
+.step-limit-warning {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.9em;
+}
+
+/* 誤りと警告は色だけでなく文言の接頭辞で伝える */
+.step-limit-error {
+  font-weight: 600;
+}
+
+.step-limit-warning {
+  font-weight: 600;
+}
