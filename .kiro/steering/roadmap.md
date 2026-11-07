@@ -32,7 +32,7 @@
   - CLI と GUI の結果一致(同一入力で同一出力)
 
 ## Specs (dependency order)
-> チェックボックスは **実装完了** を表す(各 spec の `spec.json` の `phase` が `implementation-complete`、かつ最終検証が GO)。`[ ]` は要件・設計・タスクが承認済みで実装待ち(`phase: tasks-generated`)の状態を指す。
+> チェックボックスは **実装完了** を表す(各 spec の `spec.json` の `phase` が `implementation-complete`、かつ最終検証が GO。実機での手動確認が必要でその一部が未実施の場合は、自動検証がすべて成功し、未確認の項目が spec の `traceability.md` と実装の README に明記されていれば、`[x]` としてよい。その場合の最終検証は MANUAL_VERIFY_REQUIRED(一部)となる)。`[ ]` は要件・設計・タスクが承認済みで実装待ち(`phase: tasks-generated`)の状態を指す。
 - [x] brainfuck-core -- Cargo workspace、命令/パーサ(jump_table)/Machine/エラー/スナップショット/step/run/ステップ制限と単体テスト。Dependencies: none
 - [x] brainfuck-cli -- ファイル/stdin 入力、stdout/stderr 分離、終了コード 0/2/3/4、`--max-steps` 等、`examples/hello.bf`、README。Dependencies: brainfuck-core
 - [x] debugger-state -- Phase 1.5: ブレークポイント、StopReason(Breakpoint/Cancelled)、バッチ実行(既定1,000命令)、テープ表示窓(±16)、命令添字→ソース範囲/行・列変換。Dependencies: brainfuck-core
@@ -43,4 +43,4 @@
 ## Notes
 - compiler-comparison のタスクグループ 1〜3(WASM バックエンドと比較ロジック)は optimized-interpreter のみに依存し、desktop-gui 完了前に着手できる。グループ 4〜7(GUI 統合)は desktop-gui に依存する
 - 各 spec の design で追加された crate は structure.md を参照
-- 実装状況(2026-11-08 時点): brainfuck-core、brainfuck-cli、debugger-state、optimized-interpreter、desktop-gui が実装完了(要件→テストの対応は各 spec の `traceability.md`)。desktop-gui は自動検証と実機での手動スモークの大半が完了済みで、ライトテーマ・OS の高コントラスト・スクリーンリーダー(NVDA)の確認と、1 秒以内の更新周期などの計測が未確認(README の「検証結果の記録」)。compiler-comparison は desktop-gui の完了により、グループ 1〜7 のすべてに着手できる
+- 実装状況(2026-11-08 時点。desktop-gui の最終検証と実機確認は 2026-11-07 に実施): brainfuck-core、brainfuck-cli、debugger-state、optimized-interpreter、desktop-gui が実装完了(要件→テストの対応は各 spec の `traceability.md`)。desktop-gui は自動検証がすべて成功し、実機での手動スモークも実施可能な項目は合格済みで、最終検証は MANUAL_VERIFY_REQUIRED(一部)。未確認の項目は、ライトテーマ・OS の高コントラスト・スクリーンリーダー(NVDA)の確認と、1 秒以内の更新周期などの計測で、`.kiro/specs/desktop-gui/traceability.md` と `apps/desktop/README.md` の「検証結果の記録」に記載している。compiler-comparison は desktop-gui の完了により、グループ 1〜7 のすべてに着手できる
