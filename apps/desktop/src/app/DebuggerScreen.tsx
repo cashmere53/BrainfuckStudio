@@ -32,7 +32,7 @@ import { debuggerReducer, initialDebuggerState, type DebuggerAction, type Debugg
 import { createRunController, type RunController, type RunHost } from "../state/runController";
 import { useWorkspace, workspaceStore, type DocumentState, type WorkspaceStore } from "../state/workspace";
 import { CONFIRM_TEXT, createDocumentFlow, type DocumentFlow, type PendingConfirm } from "./documentFlow";
-import { useShortcuts } from "./shortcuts";
+import { useDefaultContextMenuSuppressed, useShortcuts } from "./shortcuts";
 
 export interface DebuggerScreenProps {
   /** 実行のバックエンド。既定は本物の IPC(テストでは偽バックエンドを注入する) */
@@ -92,7 +92,13 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
 
   // 実行制御の生成と破棄。StrictMode の二重マウントでは、最初のコントローラを破棄してから作り直す
   useEffect(() => {
-    const controller = createRunController({ backend, workspace, host });
+    // ファイル操作(保存先の選択・確認を含む)の進行中は実行を始めない
+    const controller = createRunController({
+      backend,
+      workspace,
+      host,
+      canStart: () => flowRef.current?.isBusy() !== true,
+    });
     controllerRef.current = controller;
     return () => {
       controller.dispose();
@@ -109,6 +115,8 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
       workspace,
       notify: (notice) => host.dispatch({ type: "noticeAdded", notice }),
       setPending,
+      // 実行の途中(開始処理・実行ループ)は文書を新規・置換しない
+      canEdit: () => controllerRef.current?.isBusy() !== true,
     });
     flowRef.current = flow;
     return () => {
@@ -129,6 +137,7 @@ export function DebuggerScreen(props: DebuggerScreenProps = {}) {
 
   // ショートカット(要件 14.1)。操作が無効なら発火しない。確認の表示中は modal のため受けない。
   // F9 は入力欄からの入力では切り替えない(入力欄の中の F9 を奪わない)
+  useDefaultContextMenuSuppressed();
   useShortcuts((id, event) => {
     if (pending !== null) return;
     const controller = controllerRef.current;

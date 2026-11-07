@@ -10,7 +10,10 @@ import { createDocumentFlow, type PendingConfirm } from "./documentFlow";
 const IO_FAILURE: ApiError = { kind: "io", message: "failed to write file: access denied", field: null };
 
 /** 文書フローを組み立てる。pending と通知は記録して返す */
-function setup(script: FakeScript = {}, options: { dirty?: boolean; source?: string } = {}) {
+function setup(
+  script: FakeScript = {},
+  options: { dirty?: boolean; source?: string; canEdit?: () => boolean } = {},
+) {
   // 文書操作の後は未保存フラグを必ず送り直すため、既定で受理する台本を入れる
   const backend: FakeBackend = createFakeBackend({ setDocumentDirty: () => undefined, ...script });
   const workspace: WorkspaceStore = createWorkspace();
@@ -26,6 +29,7 @@ function setup(script: FakeScript = {}, options: { dirty?: boolean; source?: str
     backend,
     workspace,
     notify: (notice) => notices.push(notice),
+    canEdit: options.canEdit,
     setPending: (next) => {
       pending = next;
     },
@@ -385,3 +389,58 @@ describe("文書フロー: 保存中の編集(要件 2.5・2.9)", () => {
     expect(backend.calls.filter((call) => call.method === "setDocumentDirty").map((call) => call.args[0]).pop()).toBe(true);
   });
 });
+
+describe("文書フロー: 実行の途中の置換の抑止(最終検証の修正)", () => {
+  it("実行の途中(canEdit が false)は新規・開くを受けず、ダイアログも出さない", async () => {
+    const { flow, backend, pending } = setup({ newDocument: () => undefined }, { dirty: true, canEdit: () => false });
+
+    await flow.requestNew();
+    await flow.requestOpen();
+
+    expect(calls(backend, "newDocument")).toBe(0);
+    expect(calls(backend, "openSourceFile")).toBe(0);
+    expect(pending()).toBeNull();
+  });
+
+  it("確認を出した後に実行が始まっても、確定時点で編集できなければ置換しない", async () => {
+    let editable = true;
+    const { flow, backend, workspace, pending } = setup(
+      { openSourceFile: () => ({ kind: "opened", source: "+.", fileName: "b.bf", lossy: false }) },
+      { dirty: true, canEdit: () => editable },
+    );
+    const sourceBefore = workspace.getSnapshot().source;
+    await flow.requestOpen();
+    expect(pending()).toBe("open");
+
+    editable = false;
+    await flow.confirmPending();
+    await settle();
+
+    expect(calls(backend, "openSourceFile")).toBe(0);
+    expect(workspace.getSnapshot().source).toBe(sourceBefore);
+    expect(pending()).toBeNull();
+  });
+
+  it("ファイル操作の進行中は isBusy が true で、完了すると false に戻る", async () => {
+    const gate = deferredResult<OpenFileResult>();
+    const { flow, backend } = setup({ openSourceFile: () => gate.promise });
+    expect(flow.isBusy()).toBe(false);
+
+    const opening = flow.requestOpen();
+    await settle();
+    expect(calls(backend, "openSourceFile")).toBe(1);
+    expect(flow.isBusy()).toBe(true);
+
+    gate.resolve({ kind: "cancelled" });
+    await opening;
+    expect(flow.isBusy()).toBe(false);
+  });
+});
+
+function deferredResult<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}

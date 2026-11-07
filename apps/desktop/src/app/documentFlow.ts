@@ -52,6 +52,11 @@ export type DocumentFlowDeps = {
   notify: (notice: Notice) => void;
   /** 確認ダイアログの表示対象が変わったときに呼ぶ(null は非表示) */
   setPending: (pending: PendingConfirm | null) => void;
+  /**
+   * 文書を新規・置換してよいか(実行の途中は false)。要求の時点と確定の時点で判定する。既定は常に true。
+   * 実行中に置換すると古いプログラムのセッションと食い違うため、実行を止めて行わせる。
+   */
+  canEdit?: () => boolean;
 };
 
 export type DocumentFlow = {
@@ -65,11 +70,19 @@ export type DocumentFlow = {
   confirmPending(): Promise<void>;
   /** 確認ダイアログの取消: 何も変えない */
   cancelPending(): void;
+  /** ファイル操作の進行中(保存先の選択・確認の表示を含む)か。実行の開始を控えるかの判定に使う */
+  isBusy(): boolean;
   /** 購読を解除する(アンマウント・StrictMode の作り直し) */
   dispose(): void;
 };
 
-export function createDocumentFlow({ backend, workspace, notify, setPending }: DocumentFlowDeps): DocumentFlow {
+export function createDocumentFlow({
+  backend,
+  workspace,
+  notify,
+  setPending,
+  canEdit = () => true,
+}: DocumentFlowDeps): DocumentFlow {
   let pending: PendingConfirm | null = null;
   let busy = false;
   let disposed = false;
@@ -180,7 +193,7 @@ export function createDocumentFlow({ backend, workspace, notify, setPending }: D
   };
 
   const requestNew = async (): Promise<void> => {
-    if (busy || pending !== null || disposed) return;
+    if (busy || pending !== null || disposed || !canEdit()) return;
     if (workspace.getSnapshot().document.dirty) {
       showPending("new");
       return;
@@ -189,7 +202,7 @@ export function createDocumentFlow({ backend, workspace, notify, setPending }: D
   };
 
   const requestOpen = async (): Promise<void> => {
-    if (busy || pending !== null || disposed) return;
+    if (busy || pending !== null || disposed || !canEdit()) return;
     if (workspace.getSnapshot().document.dirty) {
       showPending("open");
       return;
@@ -203,6 +216,8 @@ export function createDocumentFlow({ backend, workspace, notify, setPending }: D
     const action = pending;
     if (action === null || disposed) return;
     showPending(null);
+    // 確認の表示後に実行が始まっていたら、置換せず取り消す(確定の時点で判定する)
+    if (action !== "close" && !canEdit()) return;
     if (action === "new") {
       await exclusive(doNew);
     } else if (action === "open") {
@@ -216,6 +231,8 @@ export function createDocumentFlow({ backend, workspace, notify, setPending }: D
     if (pending === null) return;
     showPending(null);
   };
+
+  const isBusy = (): boolean => busy || pending !== null;
 
   // 閉じる要求(Rust の close-requested)。未保存なら確認、未保存でなければ確認なしで終了を確定させる
   const onCloseRequested = (): void => {
@@ -251,5 +268,5 @@ export function createDocumentFlow({ backend, workspace, notify, setPending }: D
     }
   };
 
-  return { requestNew, requestOpen, save, confirmPending, cancelPending, dispose };
+  return { requestNew, requestOpen, save, confirmPending, cancelPending, isBusy, dispose };
 }

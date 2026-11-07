@@ -109,3 +109,20 @@ export function useShortcuts(onShortcut: (id: ShortcutId, event: KeyboardEvent) 
     };
   }, []);
 }
+
+/**
+ * 既定のコンテキストメニュー(WebView2 の「最新の情報に更新」など)を抑止する。
+ * 再読み込みに当たる操作は、未保存の確認を経ずに文書を失わせるため、右クリックからも出さない。
+ * エディタ内の編集操作はキーボードの Ctrl+X/C/V/Z で行う。アンマウントで解除する。
+ */
+export function useDefaultContextMenuSuppressed(): void {
+  useEffect(() => {
+    const suppress = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("contextmenu", suppress);
+    return () => {
+      window.removeEventListener("contextmenu", suppress);
+    };
+  }, []);
+}

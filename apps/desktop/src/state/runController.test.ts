@@ -18,7 +18,7 @@ import type { RunBatchRequest } from "../generated/RunBatchRequest";
 import { createRunController, type RunControllerDeps } from "./runController";
 import { createWorkspace, type WorkspaceStore } from "./workspace";
 
-type RunOptions = Partial<Pick<RunControllerDeps, "now" | "frames">>;
+type RunOptions = Partial<Pick<RunControllerDeps, "now" | "frames" | "canStart">>;
 
 const PARSE_ERR: ParseErrorDto = {
   kind: "unmatchedOpeningBracket",
@@ -1300,5 +1300,117 @@ describe("RunController: Run 開始時のブレークポイント同期", () => 
 
     expect(methods(backend).slice(2)).toEqual(["setBreakpoints", "setBreakpoints", "runBatch"]);
     expect(backend.calls.at(-2)).toEqual({ method: "setBreakpoints", args: [{ sessionId: 1, offsets: [0] }] });
+  });
+});
+
+describe("RunController: 実行中の文書置換と開始処理の直列化(最終検証の修正)", () => {
+  it("実行中に文書を置換しても表示は変えず、停止のあと未開始へ戻る(古いプログラムのセッションを残さない)", async () => {
+    const gate = deferred<BatchResultDto>();
+    const { backend, workspace, host, controller } = runSetup({ runBatch: () => gate.promise });
+    const running = controller.run();
+    await flush();
+    expect(host.getState().phase).toBe("running");
+
+    workspace.replaceDocument({ source: "+.", fileName: "b.bf", lossy: false });
+    expect(host.getState().phase).toBe("running");
+
+    gate.resolve(batchDto(10, { kind: "breakpoint" }));
+    await running;
+
+    expect(host.getState()).toMatchObject({ phase: "noSession", sessionId: null, programId: null });
+    await controller.step();
+    expect(methods(backend).filter((method) => method === "loadSource")).toHaveLength(2);
+  });
+
+  it.each([
+    ["ソース", (w: WorkspaceStore) => w.setSource("+.")],
+    ["入力", (w: WorkspaceStore) => w.setInput({ mode: "text", text: "A" })],
+    ["有効な上限", (w: WorkspaceStore) => w.setLimitText("42")],
+  ])("実行中の%sの変更も、停止のあと未開始へ戻る", async (_label, mutate) => {
+    const gate = deferred<BatchResultDto>();
+    const { workspace, host, controller } = runSetup({ runBatch: () => gate.promise });
+    const running = controller.run();
+    await flush();
+
+    mutate(workspace);
+    gate.resolve(batchDto(10, { kind: "cancelled" }));
+    await running;
+
+    expect(host.getState()).toMatchObject({ phase: "noSession", sessionId: null });
+  });
+
+  it("開始処理の往復中に文書を置換すると、開始は破棄され、古いプログラムのセッションは残らない", async () => {
+    const start = deferred<SessionStartedDto>();
+    const { backend, workspace, host, controller } = runSetup({ startSession: () => start.promise });
+    const running = controller.run();
+    await flush();
+    expect(methods(backend)).toContain("startSession");
+
+    workspace.replaceDocument({ source: "+.", fileName: "b.bf", lossy: false });
+    start.resolve({ state: stateDto(1, 0), breakpoints: { breakpoints: [], unresolved: [] } });
+    await running;
+
+    expect(host.getState()).toMatchObject({ phase: "noSession", sessionId: null });
+    expect(methods(backend)).not.toContain("runBatch");
+  });
+
+  it("Run の二重押しは 1 回にまとめ、停止位置の要求を積まない", async () => {
+    const responses = [batchDto(10, { kind: "breakpoint" })];
+    const { backend, controller } = runSetup({
+      runBatch: () => responses.shift() ?? batchDto(10, { kind: "halted" }),
+    });
+
+    await Promise.all([controller.run(), controller.run()]);
+
+    expect(methods(backend).filter((method) => method === "startSession")).toHaveLength(1);
+    expect(methods(backend).filter((method) => method === "runBatch")).toHaveLength(1);
+  });
+
+  it("dispose の後にキューに残った Step は IPC を発行しない", async () => {
+    const gate = deferred<StepResultDto>();
+    const { backend, controller } = setup(okScript({ step: () => gate.promise }));
+    await controller.ensureSession();
+    const first = controller.step();
+    await flush();
+    const queued = controller.step();
+
+    controller.dispose();
+    gate.resolve({ outcome: { kind: "executed" }, state: stateDto(1, 1) });
+    await first;
+    await queued;
+
+    expect(methods(backend).filter((method) => method === "step")).toHaveLength(1);
+  });
+
+  it("dispose の後の Run は何も発行しない", async () => {
+    const { backend, controller } = runSetup();
+
+    controller.dispose();
+    await controller.run();
+
+    expect(backend.calls).toEqual([]);
+  });
+
+  it("canStart が false の間(ファイル操作の進行中)は Run・Step を開始せず、何も発行しない", async () => {
+    const { backend, controller } = setup(runScript(), { canStart: () => false });
+
+    await controller.run();
+    await controller.step();
+
+    expect(backend.calls).toEqual([]);
+  });
+
+  it("実行の途中は isBusy が true で、停止すると false に戻る", async () => {
+    const gate = deferred<BatchResultDto>();
+    const { controller } = runSetup({ runBatch: () => gate.promise });
+    expect(controller.isBusy()).toBe(false);
+
+    const running = controller.run();
+    await flush();
+    expect(controller.isBusy()).toBe(true);
+
+    gate.resolve(batchDto(10, { kind: "breakpoint" }));
+    await running;
+    expect(controller.isBusy()).toBe(false);
   });
 });

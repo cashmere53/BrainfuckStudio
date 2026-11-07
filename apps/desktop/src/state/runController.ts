@@ -50,6 +50,10 @@ export type RunControllerDeps = {
   now?: () => number;
   /** 描画の間引きに使うフレーム予約。既定は requestAnimationFrame(無ければタイマー) */
   frames?: FrameScheduler;
+  /**
+   * 実行(Run・Step)を始めてよいか。開始の直前に判定する(ファイル操作の進行中は false にする)。既定は常に true
+   */
+  canStart?: () => boolean;
 };
 
 export type RunController = {
@@ -63,7 +67,9 @@ export type RunController = {
   step(): Promise<void>;
   /** セッションを初期状態へ戻す(ブレークポイントは保持)。セッションが無ければ何もしない */
   reset(): Promise<void>;
-  /** Workspace の購読を解除する */
+  /** Run・Step の処理(開始処理・実行ループを含む)の途中か。文書の置換を控えるかの判定に使う */
+  isBusy(): boolean;
+  /** Workspace の購読を解除する。キューに残った処理は発行しない */
   dispose(): void;
 };
 
@@ -124,6 +130,7 @@ export function createRunController({
   host,
   now = () => performance.now(),
   frames = defaultFrames,
+  canStart = () => true,
 }: RunControllerDeps): RunController {
   const dispatch = (action: DebuggerAction): void => host.dispatch(action);
 
@@ -139,6 +146,14 @@ export function createRunController({
   let loopActive = false;
   // 実行中の Pause の RPC 失敗(ループが止まった時点で、最終応答の反映の後に反映する)
   let pauseFailure: ApiError | null = null;
+  // Run・Step の処理の途中か(開始処理・実行ループを含む。isBusy が返す)
+  let busy = false;
+  // 実行中に実行入力が変わった。停止の後(Run の finally)で無効化する(古いプログラムのセッションを残さない)
+  let staleAfterRun = false;
+  // 開始・実行中の Run(二重押しを 1 回にまとめるため、未完了の Run の処理を保持する)
+  let runInFlight: Promise<void> | null = null;
+  // dispose 済み。キューに残った処理は発行しない
+  let disposed = false;
 
   const dropFrame = (): void => {
     if (cancelFrame !== null) {
@@ -183,10 +198,11 @@ export function createRunController({
     }
   };
 
-  // 直列化: 前の要求が終わってから次を発行する(失敗は各タスク内で処理済みのため連鎖を止めない)
+  // 直列化: 前の要求が終わってから次を発行する(失敗は各タスク内で処理済みのため連鎖を止めない)。
+  // 破棄の後にキューへ残った処理は発行せず、`skipped` を返す
   let tail: Promise<void> = Promise.resolve();
-  const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
-    const next = tail.then(task);
+  const enqueue = <T>(task: () => Promise<T>, skipped: T): Promise<T> => {
+    const next = tail.then(() => (disposed ? skipped : task()));
     tail = next.then(
       () => undefined,
       () => undefined,
@@ -260,37 +276,45 @@ export function createRunController({
     }
   };
 
-  const ensureSession = (): Promise<boolean> => enqueue(startSession);
+  const ensureSession = (): Promise<boolean> => enqueue(async () => (canStart() ? startSession() : false), false);
 
   const step = (): Promise<void> =>
     enqueue(async () => {
-      if (host.getState().phase === "noSession" && !(await startSession())) {
+      if (!canStart()) {
         return;
       }
-      const current = host.getState();
-      // 待機中(idle)のみ Step できる。停止状態・実行エラー・実行中は無効(要件 4.8 / 4.11)
-      if (current.phase !== "idle" || current.sessionId === null) {
-        return;
-      }
-      const snapshot = workspace.getSnapshot();
-      const gen = generation;
+      busy = true;
       try {
-        const result = await backend.step({
-          sessionId: current.sessionId,
-          view: { tapeRadius: snapshot.tapeRadius, outputFrom: current.output.end },
-        });
-        // 破棄・置換の後に届いた応答は捨てる
-        if (gen !== generation) {
+        if (host.getState().phase === "noSession" && !(await startSession())) {
           return;
         }
-        dispatch({ type: "stepResult", result });
-      } catch (rejection: unknown) {
-        if (gen !== generation) {
+        const current = host.getState();
+        // 待機中(idle)のみ Step できる。停止状態・実行エラー・実行中は無効(要件 4.8 / 4.11)
+        if (current.phase !== "idle" || current.sessionId === null) {
           return;
         }
-        failOperation(normalizeApiError(rejection));
+        const snapshot = workspace.getSnapshot();
+        const gen = generation;
+        try {
+          const result = await backend.step({
+            sessionId: current.sessionId,
+            view: { tapeRadius: snapshot.tapeRadius, outputFrom: current.output.end },
+          });
+          // 破棄・置換の後に届いた応答は捨てる
+          if (gen !== generation) {
+            return;
+          }
+          dispatch({ type: "stepResult", result });
+        } catch (rejection: unknown) {
+          if (gen !== generation) {
+            return;
+          }
+          failOperation(normalizeApiError(rejection));
+        }
+      } finally {
+        busy = false;
       }
-    });
+    }, undefined);
 
   const reset = (): Promise<void> =>
     enqueue(async () => {
@@ -315,7 +339,7 @@ export function createRunController({
         }
         failOperation(normalizeApiError(rejection));
       }
-    });
+    }, undefined);
 
   // ブレークポイント同期(キューの中で呼ぶ): 現在のセッションへ現在の集合を置換として送る。
   // 受理済みと同じなら送らない(冪等)。失敗・無効化なら false(呼び出し側は実行を始めない)
@@ -348,7 +372,7 @@ export function createRunController({
   const syncBreakpoints = (): Promise<void> =>
     enqueue(async () => {
       await syncBreakpointsNow();
-    });
+    }, undefined);
 
   // Run のループ(キューの中で呼ぶ)。停止理由が batchReached かつ待機中でない限り、次のバッチを発行する。
   // 出力の不変条件: 次に要求する outputFrom は `accepted`(受理済みの出力の末尾)。画面の反映は間引くため
@@ -454,27 +478,50 @@ export function createRunController({
     }
   };
 
-  // Run: 待機中でなければ何もしない。開始 → ブレークポイント同期 → ループ(5.5 の同期の後に実行する)
-  const run = (): Promise<void> =>
-    enqueue(async () => {
-      if (host.getState().phase === "noSession" && !(await startSession())) {
+  // Run: 待機中でなければ何もしない。開始 → ブレークポイント同期 → ループ(5.5 の同期の後に実行する)。
+  // 開始中・実行中の Run は同じ処理に合流する(二重押しで停止位置の要求を積まない)
+  const run = (): Promise<void> => {
+    if (runInFlight !== null) {
+      return runInFlight;
+    }
+    const task = enqueue(async () => {
+      if (!canStart()) {
         return;
       }
-      if (host.getState().phase !== "idle") {
-        return;
+      busy = true;
+      try {
+        if (host.getState().phase === "noSession" && !(await startSession())) {
+          return;
+        }
+        if (host.getState().phase !== "idle") {
+          return;
+        }
+        // ブレークポイントの同期に失敗したら実行しない(次の Run で同じ集合を再送する)
+        if (!(await syncBreakpointsNow())) {
+          return;
+        }
+        const current = host.getState();
+        if (current.phase !== "idle" || current.sessionId === null) {
+          return;
+        }
+        // 開始の反映: 実行中の表示へ切り替える(局所フラグ・通知・エラーは Run で下ろす)
+        dispatch({ type: "runStarted" });
+        await runLoop(current.sessionId);
+      } finally {
+        busy = false;
+        runInFlight = null;
+        // 実行中に入力が変わっていた場合は、停止の後に未開始へ戻す(表示は停止まで変えない)
+        if (staleAfterRun) {
+          staleAfterRun = false;
+          if (!disposed) {
+            invalidate();
+          }
+        }
       }
-      // ブレークポイントの同期に失敗したら実行しない(次の Run で同じ集合を再送する)
-      if (!(await syncBreakpointsNow())) {
-        return;
-      }
-      const current = host.getState();
-      if (current.phase !== "idle" || current.sessionId === null) {
-        return;
-      }
-      // 開始の反映: 実行中の表示へ切り替える(局所フラグ・通知・エラーは Run で下ろす)
-      dispatch({ type: "runStarted" });
-      await runLoop(current.sessionId);
-    });
+    }, undefined);
+    runInFlight = task;
+    return task;
+  };
 
   // Pause: キューを追い越して即時に発行する。局所フラグを先に立て、backend の pause はロックを取らないため
   // run_batch の実行中でも待たされない。実行中以外・セッションが無い場合は何もしない。
@@ -520,16 +567,21 @@ export function createRunController({
         }
         failOperation(normalizeApiError(rejection));
       }
-    });
+    }, undefined);
 
-  // Workspace の変更を購読する。実行中の編集は画面が受け付けないため、無効化は実行中には行わない。
+  // Workspace の変更を購読する。実行中の変更は表示を変えず、停止の後に無効化する(staleAfterRun)。
+  // 実行中でなければ(開始処理の途中を含む)直ちに無効化し、開始の応答は世代で捨てる。
   let previous = workspace.getSnapshot();
   const unsubscribe = workspace.subscribe(() => {
     const before = previous;
     const next = workspace.getSnapshot();
     previous = next;
-    if (executionInputsChanged(before, next) && !isRunningPhase(host.getState().phase)) {
-      invalidate();
+    if (executionInputsChanged(before, next)) {
+      if (isRunningPhase(host.getState().phase)) {
+        staleAfterRun = true;
+      } else {
+        invalidate();
+      }
     }
     if (!sameNumbers(before.breakpoints, next.breakpoints)) {
       void syncBreakpoints();
@@ -539,12 +591,15 @@ export function createRunController({
     }
   });
 
-  // 破棄: 購読を解除し、世代を進めて進行中の応答を捨て、予約中の描画を取り消す
+  // 破棄: 購読を解除し、世代を進めて進行中の応答を捨て、予約中の描画を取り消す。キューの残りは発行しない
   const dispose = (): void => {
+    disposed = true;
     unsubscribe();
     generation += 1;
     dropFrame();
   };
 
-  return { ensureSession, run, pause, step, reset, dispose };
+  const isBusy = (): boolean => busy;
+
+  return { ensureSession, run, pause, step, reset, isBusy, dispose };
 }

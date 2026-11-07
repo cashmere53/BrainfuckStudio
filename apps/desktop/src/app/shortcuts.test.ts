@@ -1,6 +1,13 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { isReloadKey, shortcutKeyOf, shortcutOf, type ShortcutKeyInput, useShortcuts } from "./shortcuts";
+import {
+  isReloadKey,
+  shortcutKeyOf,
+  shortcutOf,
+  type ShortcutKeyInput,
+  useDefaultContextMenuSuppressed,
+  useShortcuts,
+} from "./shortcuts";
 
 /** 既定は修飾キーなし・繰り返しなし・IME 変換なし */
 function key(overrides: Partial<ShortcutKeyInput> & { key: string }): ShortcutKeyInput {
@@ -150,5 +157,20 @@ describe("useShortcuts: 購読の段階と解除", () => {
     dispatch(window, { key: "F5" });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDefaultContextMenuSuppressed: 既定のコンテキストメニューの抑止(未保存の文書を失わないため)", () => {
+  it("右クリックの既定メニュー(最新の情報に更新など)を抑止し、アンマウントで解除する", () => {
+    const { unmount } = renderHook(() => useDefaultContextMenuSuppressed());
+
+    const shown = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    window.dispatchEvent(shown);
+    expect(shown.defaultPrevented).toBe(true);
+
+    unmount();
+    const after = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
   });
 });
