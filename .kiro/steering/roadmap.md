@@ -36,11 +36,11 @@
 - [x] brainfuck-core -- Cargo workspace、命令/パーサ(jump_table)/Machine/エラー/スナップショット/step/run/ステップ制限と単体テスト。Dependencies: none
 - [x] brainfuck-cli -- ファイル/stdin 入力、stdout/stderr 分離、終了コード 0/2/3/4、`--max-steps` 等、`examples/hello.bf`、README。Dependencies: brainfuck-core
 - [x] debugger-state -- Phase 1.5: ブレークポイント、StopReason(Breakpoint/Cancelled)、バッチ実行(既定1,000命令)、テープ表示窓(±16)、命令添字→ソース範囲/行・列変換。Dependencies: brainfuck-core
-- [ ] desktop-gui -- Phase 2: Tauri 2 + React + CodeMirror 6、Run/Pause/Step/Reset、テープ/出力/状態ビュー、括弧対応・現在命令強調、DTO と Tauri コマンド(最小 6 コマンドを含む。詳細は desktop-gui の design)、CLI 一致検証。Dependencies: debugger-state, brainfuck-cli, brainfuck-core
+- [x] desktop-gui -- Phase 2: Tauri 2 + React + CodeMirror 6、Run/Pause/Step/Reset、テープ/出力/状態ビュー、括弧対応・現在命令強調、DTO と Tauri コマンド(最小 6 コマンドを含む。詳細は desktop-gui の design)、CLI 一致検証。Dependencies: debugger-state, brainfuck-cli, brainfuck-core
 - [x] optimized-interpreter -- Phase 3: IR、連続命令統合、代表的ループ最適化、素朴実装とのディファレンシャルテスト、ベンチマーク(正規テストと分離)。Dependencies: brainfuck-core
 - [ ] compiler-comparison -- Phase 4: WASM またはネイティブ AOT の少なくとも一方、方式・実行時間・命令数・終了状態を表示する比較画面。Dependencies: optimized-interpreter, desktop-gui, brainfuck-core
 
 ## Notes
 - compiler-comparison のタスクグループ 1〜3(WASM バックエンドと比較ロジック)は optimized-interpreter のみに依存し、desktop-gui 完了前に着手できる。グループ 4〜7(GUI 統合)は desktop-gui に依存する
 - 各 spec の design で追加された crate は structure.md を参照
-- 実装状況(2026-11-04 時点): brainfuck-core、brainfuck-cli、debugger-state、optimized-interpreter が実装完了(要件→テストの対応は各 spec の `traceability.md`)。desktop-gui は debugger-state と brainfuck-cli の完了により、compiler-comparison のグループ 1〜3 は optimized-interpreter の完了により着手できる(グループ 4〜7 は desktop-gui の完了後)
+- 実装状況(2026-11-08 時点): brainfuck-core、brainfuck-cli、debugger-state、optimized-interpreter、desktop-gui が実装完了(要件→テストの対応は各 spec の `traceability.md`)。desktop-gui は自動検証と実機での手動スモークの大半が完了済みで、ライトテーマ・OS の高コントラスト・スクリーンリーダー(NVDA)の確認と、1 秒以内の更新周期などの計測が未確認(README の「検証結果の記録」)。compiler-comparison は desktop-gui の完了により、グループ 1〜7 のすべてに着手できる
