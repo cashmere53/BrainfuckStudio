@@ -15,9 +15,20 @@
   min-height: 100%;
 }
 
+/* グリッドの項目は既定で min-width: auto(内容の最小幅)になり、幅の広い内容で親の幅を超えて右が切れる。
+   全項目で 0 にして、列の幅(minmax(0, fr))の内側に収める */
+.debugger-screen > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 領域の内側に余白を持たせ、フォーカス枠(outline)が領域の端で切れないようにする */
 .debugger-area {
+  box-sizing: border-box;
   min-width: 0;
   min-height: 0;
+  max-width: 100%;
+  padding: 4px;
   overflow: auto;
 }
 

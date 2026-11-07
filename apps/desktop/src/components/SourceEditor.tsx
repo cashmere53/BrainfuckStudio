@@ -4,6 +4,7 @@ import { Compartment, EditorState, type Extension, type StateEffect } from "@cod
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { bracketMatchingExtensions } from "../editor/bracketMatching";
+import { editorTheme } from "../editor/editorTheme";
 import {
   type BreakpointRejection,
   breakpointExtensions,
@@ -108,6 +109,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, SourceEditorProps>(fu
       doc,
       extensions: [
         lineNumbers(),
+        editorTheme,
         EditorView.contentAttributes.of({ "aria-label": "ソース" }),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),

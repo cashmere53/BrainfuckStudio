@@ -7,8 +7,10 @@
 
 .tape-view-header {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
 .tape-cells {

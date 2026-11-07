@@ -11,6 +11,7 @@
   gap: 8px 16px;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
 }
 
 .output-view-modes {
@@ -56,7 +57,15 @@
 
 .output-view-hex-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
+  min-width: 0;
+}
+
+/* 16 進の列は折り返せるようにし、幅の狭い領域で右へはみ出さないようにする */
+.output-view-bytes {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .output-view-offset {
