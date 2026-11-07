@@ -239,13 +239,13 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 | --- | --- |
 | Rust: `cargo test --workspace`(ルート) | 成功(exit 0)。全 55 テストバイナリ・938 件が成功、失敗 0 |
 | Rust: `cargo test -p brainfuck-gui-api --test bindings_up_to_date` | 成功。4 件が成功 |
-| Rust: `cargo test`(`apps/desktop/src-tauri`) | 成功(exit 0)。統合テスト 25 件(`commands` 7、`files` 13、`window` 5)が成功、失敗 0。新しいビルドディレクトリのフルビルドで実行した |
+| Rust: `cargo test`(`apps/desktop/src-tauri`) | 成功(exit 0)。統合テスト 27 件(`commands` 9、`files` 13、`window` 5)が成功、失敗 0。新しいビルドディレクトリのフルビルドで実行した |
 | Rust: `cargo check`(`apps/desktop/src-tauri`) | 成功(exit 0) |
 | Rust: `cargo clippy --all-targets -- -D warnings`(`apps/desktop/src-tauri`) | 成功(警告なし) |
 | Rust: `cargo fmt -- --check`(`apps/desktop/src-tauri`) | 成功 |
 | フロント: `npm run typecheck` | 成功(exit 0) |
 | フロント: `npm run lint` | 成功(exit 0) |
-| フロント: `npm test`(vitest) | 成功。41 ファイル・756 件が成功、失敗 0 |
+| フロント: `npm test`(vitest) | 成功。41 ファイル・780 件が成功、失敗 0 |
 | フロント: `npm run build` | 成功(exit 0) |
 | 型の再生成: `cargo run -p brainfuck-gui-api --example export_bindings` | 実行して内容差分が無いことを確認。差分は改行コード(CRLF)のみで、生成物は HEAD に戻した |
 | CLI: `cargo run -p brainfuck-cli -- examples/hello.bf --dump-state` | 出力は `Hello World!` と `state: pc=106 dp=6 steps=906`(CLI 側の値。GUI 側は手動スモーク 3 で未実施) |
