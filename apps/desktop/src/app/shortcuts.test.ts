@@ -174,3 +174,50 @@ describe("useDefaultContextMenuSuppressed: 既定のコンテキストメニュ�
     expect(after.defaultPrevented).toBe(false);
   });
 });
+
+describe("useDefaultContextMenuSuppressed: 編集可能な要素の上では抑止しない(9.6 レビュー指摘)", () => {
+  function contextMenuOn(target: Element): boolean {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it("入力欄・テキスト欄・編集可能な contenteditable の上では既定のメニューを残す", () => {
+    renderHook(() => useDefaultContextMenuSuppressed());
+    const input = document.createElement("input");
+    const textarea = document.createElement("textarea");
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    const inner = document.createElement("span");
+    editable.appendChild(inner);
+    document.body.append(input, textarea, editable);
+
+    try {
+      expect(contextMenuOn(input)).toBe(false);
+      expect(contextMenuOn(textarea)).toBe(false);
+      expect(contextMenuOn(editable)).toBe(false);
+      expect(contextMenuOn(inner)).toBe(false);
+    } finally {
+      input.remove();
+      textarea.remove();
+      editable.remove();
+    }
+  });
+
+  it("読み取り専用の contenteditable と、それ以外の要素の上では既定のメニューを抑止する", () => {
+    renderHook(() => useDefaultContextMenuSuppressed());
+    const readonly = document.createElement("div");
+    readonly.setAttribute("contenteditable", "false");
+    const plain = document.createElement("p");
+    document.body.append(readonly, plain);
+
+    try {
+      expect(contextMenuOn(readonly)).toBe(true);
+      expect(contextMenuOn(plain)).toBe(true);
+      expect(contextMenuOn(document.body)).toBe(true);
+    } finally {
+      readonly.remove();
+      plain.remove();
+    }
+  });
+});

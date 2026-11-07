@@ -485,11 +485,12 @@ export function createRunController({
       return runInFlight;
     }
     const task = enqueue(async () => {
-      if (!canStart()) {
-        return;
-      }
+      // canStart の判定も try の中に置く。早期 return でも finally で runInFlight を必ず戻す(戻さないと以後の Run が動かない)
       busy = true;
       try {
+        if (!canStart()) {
+          return;
+        }
         if (host.getState().phase === "noSession" && !(await startSession())) {
           return;
         }

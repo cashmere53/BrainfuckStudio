@@ -444,3 +444,32 @@ function deferredResult<T>() {
   });
   return { promise, resolve };
 }
+
+describe("文書フロー: 確認の表示中の占有と、実行中の閉じるの確定(9.6 レビュー指摘)", () => {
+  it("確認ダイアログの表示中は isBusy が true で、取消で false に戻る", async () => {
+    const { flow, pending } = setup({ newDocument: () => undefined }, { dirty: true });
+    expect(flow.isBusy()).toBe(false);
+
+    await flow.requestNew();
+    expect(pending()).toBe("new");
+    expect(flow.isBusy()).toBe(true);
+
+    flow.cancelPending();
+    expect(flow.isBusy()).toBe(false);
+  });
+
+  it("実行中(canEdit が false)でも、閉じるの確認の確定は終了を握りつぶさず確定させる", async () => {
+    const { flow, backend, pending } = setup(
+      { confirmExit: () => undefined, setDocumentDirty: () => undefined },
+      { dirty: true, canEdit: () => false },
+    );
+
+    backend.emitCloseRequested();
+    await settle();
+    expect(pending()).toBe("close");
+
+    await flow.confirmPending();
+
+    expect(calls(backend, "confirmExit")).toBe(1);
+  });
+});

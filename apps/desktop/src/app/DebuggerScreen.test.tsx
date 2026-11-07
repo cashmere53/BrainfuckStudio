@@ -2,6 +2,8 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BatchResultDto } from "../generated/BatchResultDto";
+import type { LoadSourceResult } from "../generated/LoadSourceResult";
+import type { SaveFileResult } from "../generated/SaveFileResult";
 import type { SessionStartedDto } from "../generated/SessionStartedDto";
 import type { SessionStateDto } from "../generated/SessionStateDto";
 import type { StepResultDto } from "../generated/StepResultDto";
@@ -459,6 +461,72 @@ describe("DebuggerScreen: 実行中の文書の同期失敗(要件 10.7・10.10)
       executed: 1,
       state: stateDto(1, { halted: true, lastStop: "halted" }),
     });
+    expect(await screen.findByText("正常終了")).toBeTruthy();
+  });
+});
+
+describe("DebuggerScreen: 既定のメニューの抑止と、ファイル操作・実行の占有(9.6 レビュー指摘)", () => {
+  it("画面の上の右クリックは既定のメニューを抑止し、編集可能なソースの上では残す", () => {
+    renderScreen();
+    const tape = document.querySelector(".debugger-area-tape") as Element;
+    const shown = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    tape.dispatchEvent(shown);
+    expect(shown.defaultPrevented).toBe(true);
+
+    const source = screen.getByRole("textbox", { name: "ソース" });
+    const onSource = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    source.dispatchEvent(onSource);
+    expect(onSource.defaultPrevented).toBe(false);
+  });
+
+  it("ファイル保存の進行中は Run と F5 が実行を始めず、保存の後は Run できる", async () => {
+    let releaseSave!: (result: SaveFileResult) => void;
+    const savePending = new Promise<SaveFileResult>((resolve) => {
+      releaseSave = resolve;
+    });
+    const { backend } = renderScreen(helloScript({ saveSourceFile: () => savePending }));
+
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await waitFor(() => {
+      expect(countOf(backend, "saveSourceFile")).toBe(1);
+    });
+
+    fireEvent.click(runButton());
+    fireEvent.keyDown(window, { key: "F5" });
+    await flush();
+    expect(countOf(backend, "loadSource")).toBe(0);
+    expect(countOf(backend, "startSession")).toBe(0);
+
+    releaseSave({ kind: "saved", fileName: "hello.bf" });
+    await flush();
+    fireEvent.click(runButton());
+    expect(await screen.findByText("正常終了")).toBeTruthy();
+    expect(countOf(backend, "loadSource")).toBe(1);
+  });
+
+  it("開始処理の往復中に新規・開くを押しても、文書を置換せず、ダイアログも出さない", async () => {
+    let releaseLoad!: (result: LoadSourceResult) => void;
+    const loadPending = new Promise<LoadSourceResult>((resolve) => {
+      releaseLoad = resolve;
+    });
+    const { backend, workspace } = renderScreen(helloScript({ loadSource: () => loadPending }));
+    const before = workspace.getSnapshot().source;
+
+    fireEvent.click(runButton());
+    await waitFor(() => {
+      expect(countOf(backend, "loadSource")).toBe(1);
+    });
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "o", ctrlKey: true });
+    await flush();
+
+    expect(countOf(backend, "newDocument")).toBe(0);
+    expect(countOf(backend, "openSourceFile")).toBe(0);
+    expect(workspace.getSnapshot().source).toBe(before);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    releaseLoad({ kind: "ok", programId: 7, instructionCount: 3, lineCount: 1 });
     expect(await screen.findByText("正常終了")).toBeTruthy();
   });
 });

@@ -111,13 +111,26 @@ export function useShortcuts(onShortcut: (id: ShortcutId, event: KeyboardEvent) 
 }
 
 /**
+ * 編集可能な要素の上か(入力欄・テキスト欄・contenteditable)。ここでは既定のメニュー(切り取り・コピー・貼り付け)を残す。
+ * `contenteditable="false"`(読み取り専用のエディタ)は編集可能ではないため含めない。
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  return editable !== null && editable.getAttribute("contenteditable") !== "false";
+}
+
+/**
  * 既定のコンテキストメニュー(WebView2 の「最新の情報に更新」など)を抑止する。
  * 再読み込みに当たる操作は、未保存の確認を経ずに文書を失わせるため、右クリックからも出さない。
- * エディタ内の編集操作はキーボードの Ctrl+X/C/V/Z で行う。アンマウントで解除する。
+ * ただし編集可能な要素の上では抑止しない(CodeMirror の切り取り・コピー・貼り付けを残す)。
+ * アンマウントで解除する。
  */
 export function useDefaultContextMenuSuppressed(): void {
   useEffect(() => {
     const suppress = (event: MouseEvent) => {
+      if (isEditableTarget(event.target)) return;
       event.preventDefault();
     };
     window.addEventListener("contextmenu", suppress);

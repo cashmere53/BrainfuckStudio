@@ -1414,3 +1414,44 @@ describe("RunController: 実行中の文書置換と開始処理の直列化(最
     expect(controller.isBusy()).toBe(false);
   });
 });
+
+describe("RunController: 開始の拒否後も次の Run が動く・開始の直列化の回帰(9.6 レビュー指摘)", () => {
+  it("canStart が false の Run の後でも、canStart が true になれば次の Run は開始する", async () => {
+    let allowed = false;
+    const frames = manualFrames();
+    const { backend, controller } = setup(runScript({ runBatch: () => batchDto(10, { kind: "halted" }) }), {
+      canStart: () => allowed,
+      frames,
+    });
+
+    await controller.run();
+    expect(methods(backend)).toEqual([]);
+
+    allowed = true;
+    await controller.run();
+
+    expect(methods(backend)).toContain("startSession");
+    expect(methods(backend)).toContain("runBatch");
+  });
+
+  it("canStart が false の間は ensureSession も IPC を発行しない", async () => {
+    const { backend, controller } = setup(okScript(), { canStart: () => false });
+
+    await expect(controller.ensureSession()).resolves.toBe(false);
+
+    expect(backend.calls).toEqual([]);
+  });
+
+  it("Step の開始処理(読み込み)の往復中は isBusy が true で、応答の後に false に戻る", async () => {
+    const load = deferred<LoadSourceResult>();
+    const { controller } = setup(okScript({ loadSource: () => load.promise }));
+
+    const stepping = controller.step();
+    await flush();
+    expect(controller.isBusy()).toBe(true);
+
+    load.resolve(OK_LOAD);
+    await stepping;
+    expect(controller.isBusy()).toBe(false);
+  });
+});
