@@ -1,0 +1,35 @@
+[package]
+name = "brainfuck-studio"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 独立ワークスペース。ルート `Cargo.toml` の `members` には含めない。
+# そのため `[workspace.lints]` は継承できず、下の `[lints.rust]` で自前に宣言する。
+[workspace]
+
+[lib]
+name = "brainfuck_studio"
+path = "src/lib.rs"
+
+[[bin]]
+name = "brainfuck-studio"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[build-dependencies]
+tauri-build = "2.7"
+
+[dependencies]
+# API クレート(Tauri 非依存の DTO・サービス)。`brainfuck-core` へは直接依存しない。
+brainfuck-gui-api = { path = "../../../crates/brainfuck-gui-api" }
+tauri = "2.12"
+# ダイアログ用プラグインは Rust 側にのみ登録する。WebView への権限は capabilities で与えない。
+tauri-plugin-dialog = "2.8"
+
+[dev-dependencies]
+# コマンドの登録をモックランタイムの IPC で検査する(`tauri::test`)。
+tauri = { version = "2.12", features = ["test"] }
+serde_json = "1"

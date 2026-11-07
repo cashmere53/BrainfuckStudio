@@ -1,0 +1,47 @@
+/* 状態領域のスタイル(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  color: var(--color-fg);
+  font-family: system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+
+/* 状態ラベルは文字で示す(色だけに頼らない) */
+.status-panel-label {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.status-panel-final,
+.status-panel-label {
+  line-height: 1.4;
+}
+
+.status-panel-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 12px;
+  margin: 0;
+}
+
+.status-panel-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.status-panel-item dt {
+  color: var(--color-muted);
+}
+
+.status-panel-item dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+}

@@ -1,0 +1,22 @@
+/* 解析・実行エラー表示のスタイル(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.error-banner {
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 2px solid var(--color-error);
+  border-radius: 4px;
+  color: var(--color-fg);
+  font-family: system-ui, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+
+/* 見出しは「解析エラー」「実行エラー」の文字で区別する(色だけに頼らない) */
+.error-banner-heading {
+  margin: 0 0 4px;
+  font-weight: 700;
+  color: var(--color-error);
+}
+
+.error-banner-details {
+  margin: 0;
+  padding-left: 1.25em;
+}

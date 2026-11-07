@@ -75,7 +75,7 @@
 
 ### Decision: 出力はフロントが末尾 64 KiB だけ保持し、差分 + 総バイト数で受け取る
 - **Context**: 要件 9.8、12.9。出力は最大 10,000,000 バイト以上になりうる
-- **Selected Approach**: 要求に `outputFrom`(フロントが把握している総バイト数)を含め、応答は `max(outputFrom, total − 65,536)` 以降のバイトを Base64 で返す。応答の `dataStart` が保持済み末尾と連続しない場合はバッファを置換する
+- **Selected Approach**: 要求に `outputFrom`(フロントが把握している総バイト数)を含め、応答は `max(outputFrom, total − 65,536)`(`outputFrom > total` のときは `max(0, total − 65,536)`)以降のバイトを Base64 で返す。応答の `dataStart` が保持済み末尾と連続しない場合はバッファを置換する
 - **Rationale**: 応答サイズが常に 64 KiB 以下で、UTF-8 の文字またがりも連結後に解釈できる
 - **Trade-offs**: 省略された先頭は表示できない(要件で許容)
 
