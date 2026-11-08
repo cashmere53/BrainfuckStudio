@@ -103,6 +103,39 @@ describe("startExternalSink(外部の受け口)", () => {
     expect(sink.requestCount()).toBe(1);
   });
 
+  it("パスが .js で終わる要求には text/javascript で目印のスクリプトを返す", async () => {
+    const sink = await startExternalSink();
+    openSinks.push(sink);
+
+    const response = await fetch(`${sink.origin}/external.js`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect(await response.text()).toBe("window.__bfE2eExternalRan = true;");
+    expect(sink.requestCount()).toBe(1);
+  });
+
+  it("クエリが付いていても .js のパスなら目印のスクリプトを返す", async () => {
+    const sink = await startExternalSink();
+    openSinks.push(sink);
+
+    const response = await fetch(`${sink.origin}/external.js?v=1`);
+    expect(response.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect(await response.text()).toBe("window.__bfE2eExternalRan = true;");
+  });
+
+  it(".js 以外のパスには従来どおり text/plain の sink を返し、スクリプトの目印は返さない", async () => {
+    const sink = await startExternalSink();
+    openSinks.push(sink);
+
+    for (const path of ["/", "/external.json", "/js"]) {
+      const response = await fetch(`${sink.origin}${path}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toMatch(/^text\/plain/);
+      expect(await response.text()).toBe("sink");
+    }
+    expect(sink.requestCount()).toBe(3);
+  });
+
   it("別の受け口とは別のポートを使う", async () => {
     const first = await startExternalSink();
     const second = await startExternalSink();

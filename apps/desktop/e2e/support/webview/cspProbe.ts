@@ -1,13 +1,14 @@
 // CSP の検証の補助(CspProbe)。
 // (1) ページの securitypolicyviolation を記録し、読み出せるようにする(拒否された違反の有効なディレクティブと URI)。
-// (2) 127.0.0.1 の空きポートで待ち受け、受けた要求を数えるだけの外部の受け口。拒否が効いて要求が届かなかったことを確かめる。
+// (2) 127.0.0.1 の空きポートで待ち受け、受けた要求を数える外部の受け口。拒否が効いて要求が届かなかったことを確かめる。
+//     パスが .js で終わる要求には、実行されると目印 window.__bfE2eExternalRan を立てるスクリプトを返す(CSP を緩めると目印が立つ)。
 import { createServer, type Server } from "node:http";
 import type { Page } from "@playwright/test";
 
 /** 拒否された CSP の違反(有効なディレクティブと、拒否された URI) */
 export type CspViolation = { effectiveDirective: string; blockedURI: string };
 
-/** 外部の受け口。受けた要求を数えるだけで、内容には応答しない */
+/** 外部の受け口。受けた要求を数える。.js への要求には目印を立てるスクリプトを返し、それ以外は本文 "sink" を返す */
 export interface ExternalSink {
   readonly origin: string;
   requestCount(): number;
@@ -61,8 +62,14 @@ export async function readCspViolations(page: Page): Promise<readonly CspViolati
 export function startExternalSink(): Promise<ExternalSink> {
   return new Promise<ExternalSink>((resolve, reject) => {
     let count = 0;
-    const server: Server = createServer((_request, response) => {
+    const server: Server = createServer((request, response) => {
       count += 1;
+      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      if (pathname.endsWith(".js")) {
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+        response.end("window.__bfE2eExternalRan = true;");
+        return;
+      }
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
       response.end("sink");
     });
