@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["e2e", "playwright.config.ts", "src/ipc/backend.ts"],
+  "exclude": ["e2e/.cache"]
+}

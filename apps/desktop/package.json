@@ -8,12 +8,19 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck:app && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.e2e.json",
+    "typecheck:app": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "e2e:bridge": "cargo build --manifest-path ../../Cargo.toml -p brainfuck-e2e-bridge",
+    "e2e:shim": "vite build --config e2e/support/ipcShim/vite.config.ts",
+    "e2e:prepare": "npm run build && npm run e2e:bridge && npm run e2e:shim",
+    "e2e": "npm run e2e:prepare && playwright test --project=chromium",
+    "e2e:perf": "npm run e2e:prepare && playwright test --project=perf",
+    "e2e:run": "playwright test"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -26,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "~1.65.0",
     "@tauri-apps/cli": "^2.12.4",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
