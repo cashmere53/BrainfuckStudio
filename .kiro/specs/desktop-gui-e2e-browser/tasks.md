@@ -29,7 +29,7 @@
   - _Boundary: `apps/desktop/package.json`(devDependencies への `@playwright/test` の追加、scripts への `typecheck:app`・`e2e:*`・`e2e` の追加、`typecheck` と `build` の書き換えのみ)、`apps/desktop/package-lock.json`、`apps/desktop/tsconfig.e2e.json`(新規)、`apps/desktop/eslint.config.js`(`ignores` への追加と `e2e/**` の規則の追加のみ)、`apps/desktop/vitest.config.ts`(`include` への追加のみ)、ルートの `.gitignore`(追記のみ)_
   - _Requirements: 1.2, 1.9, 3.3, 3.5_
 
-- [ ] 1.3 E2E の実行環境(パスの解決、準備物の事前確認、Playwright の設定)を用意する
+- [x] 1.3 E2E の実行環境(パスの解決、準備物の事前確認、Playwright の設定)を用意する
   - ブリッジの実行ファイル(環境変数による指定、`CARGO_TARGET_DIR`、既定の `target` の順)、シムのビルド出力、画面のビルド成果物のパスを解決するモジュールと、その単体テスト(優先順位と Windows の拡張子)を書く
   - 準備物(画面のビルド成果物、シム、ブリッジ、Chromium)の有無を、Playwright の設定の読み込み時(画面の配信サーバの起動より前)に確認し、無いものの一覧と準備のコマンド(`npm run e2e:prepare`、Chromium の導入)を示して失敗させる。環境変数 `E2E_SKIP_PREREQ=1` のときは確認を省く(`--list`・`show-report`・エディタ拡張での設定の読み込み、下流の webview のプロジェクト用)。判定は純粋関数に分けて単体テストを書く(省略の条件を含む)
   - Playwright の設定で、シナリオのディレクトリ、出力先、既定の headless、失敗時のスクリーンショットとトレース、通常(`@perf` を除く)と計測(`@perf` のみ)の 2 つのプロジェクト(`projects` の配列。下流の webview の spec が末尾に展開する)、1420 と別の既定ポート(環境変数 `E2E_PORT` で変更可)での `vite preview` の起動、CI でのレポータと再試行を設定する
