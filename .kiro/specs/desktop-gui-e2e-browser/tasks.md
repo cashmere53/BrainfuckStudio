@@ -70,7 +70,7 @@
   - _Boundary: BridgeServer, BridgeMain(`crates/brainfuck-e2e-bridge/src/server.rs` と `main.rs` の入口のみ。`dispatch.rs` の共有の型は 1.1 の宣言を使い、変えない)_
   - _Requirements: 2.1, 2.2, 2.3, 3.4_
 
-- [ ] 2.5 (P) ブリッジが複製した Tauri 層の区間の指紋を固定する
+- [x] 2.5 (P) ブリッジが複製した Tauri 層の区間の指紋を固定する
   - `src-tauri` の `app_state.rs` の `DocumentState`(構造体・`Default`・`impl`)、`commands/files.rs` の開く・保存・新規・未保存の記録と読み書きの関数(design の一覧どおり)、`window.rs` の `close_requires_confirmation` の区間を読み、空白を正規化した SHA-256 をテストに固定した値と比べる Vitest の単体テストを書く
   - 区間の取り出し(宣言の行から対応する閉じ波括弧まで)は小さな関数に分けて単体テストを書く。区間が見つからない場合も失敗にする
   - 失敗の文面には、変わった区間の名前、新しい指紋、複製先(`crates/brainfuck-e2e-bridge/src/document.rs` / `dispatch.rs`)と、複製を合わせてブリッジの単体テストを通してから指紋を更新する手順を示す
