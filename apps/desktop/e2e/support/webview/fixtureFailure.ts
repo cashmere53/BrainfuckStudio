@@ -16,3 +16,20 @@ export function shouldCollectFailureMaterials(
   }
   return status !== expectedStatus;
 }
+
+/** アプリの終了の状態(LaunchedApp.exit と同じ形。動いていれば null) */
+export type AppExitState = { readonly code: number | null; readonly signal: string | null } | null;
+
+/**
+ * OS の窓口を呼んでよいかを決める(純粋関数)。アプリが終了していれば、呼ばずに理由を返す。
+ * 終了した後の pid は別のプロセスに再利用されうるため、閉じる要求やキーが別のウィンドウへ届くのを仕組みとして防ぐ。
+ * 動いていれば null(呼んでよい)。
+ */
+export function hostCallRefusal(exit: AppExitState, operation: string, pid: number): string | null {
+  if (exit === null) {
+    return null;
+  }
+  const code = exit.code ?? "なし";
+  const signal = exit.signal ?? "なし";
+  return `アプリ(pid ${pid})は終了しています(終了コード ${code}、シグナル ${signal})。OS の操作 ${operation} は送りません(終了後の pid は別のプロセスに再利用されうるため)`;
+}

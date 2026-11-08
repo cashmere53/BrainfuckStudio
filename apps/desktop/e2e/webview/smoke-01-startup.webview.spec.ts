@@ -42,7 +42,9 @@ test.describe("スモーク 1: 起動", () => {
     await app.debuggerPage.editor.click();
     await app.page.keyboard.type("+");
 
-    await pending.completed;
+    // 応答が成功(callback)で返ったことまで確かめる(エラーの応答で解決しても失敗にする)
+    const { ok } = await pending.completed;
+    expect(ok).toBe(true);
     expect(await app.ipc.commands()).toContain("set_document_dirty");
   });
 });

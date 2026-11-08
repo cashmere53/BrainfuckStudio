@@ -125,6 +125,19 @@ describe("runLauncher(ランチャの本体。依存を差し替えて確かめ�
     expect(run.env.E2E_PORT).toBe("14400");
   });
 
+  it("空きポートの取得が reject したら spawn を呼ばずに 1 を返し、理由を出す(未処理の拒否にしない)", async () => {
+    const deps = makeDeps({
+      freePort: vi.fn(async () => {
+        throw new Error("EADDRINUSE: no port");
+      }),
+    });
+    const code = await runLauncher([], deps);
+    expect(code).toBe(1);
+    expect(deps.spawn).not.toHaveBeenCalled();
+    expect(errors.join("\n")).toContain("空きポートを取得できませんでした");
+    expect(errors.join("\n")).toContain("EADDRINUSE: no port");
+  });
+
   it("spawn が error を返したときは 1 を返し、起動の失敗を出す", async () => {
     const deps = makeDeps({
       spawn: vi.fn(() => ({ status: null, error: new Error("ENOENT spawn failed") })),

@@ -39,6 +39,7 @@
 
 ### Allowed Dependencies
 - 上流 `desktop-gui-e2e-browser` の公開の形: `DebuggerPage`(`e2e/support/pages/DebuggerPage.ts`)、`installDefaultActionProbe` / `readProbe` / `ProbeRecord`(`e2e/support/probes.ts`)、`expectFocusRingDrawn`(`e2e/support/visual/focusRing.ts`)、`playwright.config.ts` の `projects` 配列と `E2E_SKIP_PREREQ=1`・`E2E_PORT`、`DIST_INDEX_PATH`(`e2e/support/paths.ts`)
+- 上流 `paths.ts` の `REPO_ROOT`(`e2e/support/paths.ts`)の import: `smoke-01`・`smoke-03` が `examples/hello.bf` の読み込みに使う(webview の `paths.ts` は上流を import しないため、ランチャ `cli.ts` の制約とは別に、シナリオだけが上流の値を使う)
 - 製品のフロントから import してよいのは、ブラウザの spec と同じく `src/ipc/backend.ts` の定数(`CLOSE_REQUESTED_EVENT`)だけ
 - Node(devDependencies): 既存の `@playwright/test`(~1.65、ブラウザの spec が追加)と `@tauri-apps/cli`(既存)。新しい npm 依存は追加しない
 - OS: Windows 11、WebView2 Evergreen、`powershell.exe`(Windows PowerShell 5.1。`WScript.Shell`、`System.Windows.Forms`、`UIAutomationClient`、`user32` の P/Invoke)、`taskkill.exe`
@@ -136,9 +137,11 @@ apps/desktop/
 │   │   ├── appProbes.ts                 # IPC の観測、close-requested の計数、ナビゲーションの目印、抑止の無効化(陽性対照)
 │   │   ├── cspProbe.ts                  # 違反の記録と、外部オリジンの受け口(127.0.0.1 の HTTP サーバ)
 │   │   ├── fixtures.ts                  # `app` フィクスチャ(起動・接続・ページの特定・失敗時の添付・終了)
+│   │   ├── fixtureFailure.ts            # 失敗の材料を残すかの判定と、アプリ終了後に OS の窓口を呼ばない判定(純粋関数)
+│   │   ├── userDataCleanup.ts           # 古い一時フォルダ(scenario-<uuid>)の掃除の対象の選択(純粋関数。削除の I/O は呼び出し側)
 │   │   ├── projects.ts                  # opt-in のプロジェクト定義(E2E_WEBVIEW=1 のときだけ返す)
 │   │   ├── cli.ts                       # ランチャ: 環境変数を付けて Playwright を webview のプロジェクトで起動
-│   │   └── *.test.ts                    # paths / prerequisites / windowsHost / appProcess / appProbes / cspProbe / projects / cli の単体テスト
+│   │   └── *.test.ts                    # paths / prerequisites / windowsHost / appProcess / appProbes / cspProbe / projects / cli / fixtureFailure / userDataCleanup の単体テスト
 │   └── webview/                         # webview のシナリオ(webview プロジェクトの testDir)
 │       ├── prerequisites.setup.ts       # setup プロジェクト: 準備物の確認、WebView2 の版の記録、古い一時フォルダの掃除
 │       ├── smoke-01-startup.webview.spec.ts
@@ -358,7 +361,7 @@ export function bindWindowsHost(pid: number): BoundWindowsHost;
 | `runtime` | レジストリの EdgeUpdate の WebView2 のクライアント(`{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`)の `pv` を HKLM(WOW6432Node)・HKCU の順に読む |
 | `window` | プロセスの主ウィンドウ(表示中で所有者の無いトップレベル)のハンドルとタイトル |
 | `close` | 主ウィンドウへ `PostMessage(WM_SYSCOMMAND, SC_CLOSE, 0)`(× ボタンと同じ経路)。ウィンドウが無ければ `delivered: false` と理由 |
-| `keys` | `WScript.Shell.AppActivate(pid)` で前面化し、成功したら `System.Windows.Forms.SendKeys.SendWait(keys)`。前面化できなければ `delivered: false` と理由 |
+| `keys` | 前面化の段階(前面は `GetForegroundWindow` のプロセス ID で確かめる): (1) `WScript.Shell.AppActivate(pid)` を呼び、前面になるまで短く待つ(戻り値は判定に使わない)。(2) 前面にならなければ、最小化の復元と `AttachThreadInput` による `SetForegroundWindow`・`BringWindowToTop`(前面化の要求。キーは送らない)を行い、再び短く待つ。(3) それでも前面にならなければ何も送らず、`delivered: false` と「前面化できません(前面は X のままでした)」。(4) 前面になったら、送信の直前にも前面を確かめ、`System.Windows.Forms.SendKeys.SendWait(keys)` を送り、直後にも前面を確かめる。送信の直前・直後のどちらかで前面が変わっていれば `delivered: false`(キーが別のウィンドウへ届いた可能性を理由に含める) |
 | `menu` | 対象プロセスと子孫のプロセス ID(`Win32_Process` の親子)を集める。`EnumWindows` で列挙した可視の最上位ウィンドウのうち、主ウィンドウ以外で、所有プロセスが対象のプロセスツリー内、クラスが `Chrome_WidgetWin_*` のものの UI Automation の部分木(`FromHandle` の `FindFirst(Subtree)`)に `ControlType.Menu` があるか。UIA のルート直下には既定のメニューが現れないため、この方法を使う。結果は `menuOpen` と、検出時の診断 `menu`(ポップアップのクラスと項目の名前。無ければ `null`) |
 
 - 起動は `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> ...`(`execFile`)。補助スクリプトのパスは固定で、利用者の入力を引数に渡さない
@@ -416,8 +419,8 @@ export const IPC_OBSERVATION_MODE: IpcObservationMode;
 export interface IpcObserver {
   readonly mode: IpcObservationMode;
   commands(): Promise<readonly string[]>;                     // 設置以後に観測した要求のコマンド名(順序どおり)
-  /** 待ち受けを確定してから返る。completed は、確定以降に Rust から応答が返った(runCallback で callback または error の id が引かれた)そのコマンドで解決する */
-  armResponse(command: string): Promise<{ readonly completed: Promise<void> }>;
+  /** 待ち受けを確定してから返る。completed は、確定以降に Rust から応答が返った(runCallback で callback または error の id が引かれた)そのコマンドで解決し、その応答の成否 ok を返す(error の応答でも解決する) */
+  armResponse(command: string): Promise<{ readonly completed: Promise<{ readonly ok: boolean }> }>;
 }
 /** 接続後に page.evaluate で記録器を設置する(リロードしない)。前提が無ければ理由つきで失敗する */
 export function observeIpc(page: Page, mode: IpcObservationMode): Promise<IpcObserver>;
@@ -446,7 +449,7 @@ export function bypassAppSuppression(page: Page, kinds: readonly ("keydown" | "c
   - 要求の記録: `window.chrome.webview.postMessage`(書き換え可能)を包み、JSON から `cmd`・`callback`・`error` を取り、ページ内の記録に `{ id, cmd, done: 0 }` を足してから元の関数に同じ文字列を渡す。解析できない文字列は記録せずにそのまま渡す
   - 完了の記録: `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)に自前の `get` を置き、`runCallback` が記録済みの callback または error の id を引いた時点で `done = ++seq` と成否(callback なら成功、error なら失敗)を記録し、元の `get` の結果を返す。Rust はコマンドの処理を終えてから `eval` するため、`done` は「Rust 側の処理が終わって応答が返った」ことを意味する。5.6 と 4.2 の確認の根拠は「postMessage の要求と、Rust からの `runCallback` の応答」になる
   - 保険: `window.fetch`(書き換え可能)の `IPC_URL_PREFIX` 宛ての要求も同じ記録に残す(製品の CSP が変わって `fetch` 方式になった場合の検出用)
-  - `armResponse(cmd)`: 確定の時点の連番を `armedAt` として取り、`entries.some(e => e.cmd === cmd && e.done > armedAt)` を `page.waitForFunction` で待つ。回数ではなく単調な連番で比べるため、確定より前に完了した同じコマンドを拾わない
+  - `armResponse(cmd)`: 確定の時点の連番を `armedAt` として取り、`entries.some(e => e.cmd === cmd && e.done > armedAt)` を `page.waitForFunction` で待つ。回数ではなく単調な連番で比べるため、確定より前に完了した同じコマンドを拾わない。待ちが済んだら同じ条件の要求の `ok` を読み、`completed` は `{ ok }` で解決する(シナリオは `ok` が `true` であることを確かめる。エラーの応答で解決しても失敗にできる)
   - 包めないもの: `__TAURI_INTERNALS__` の `invoke`・`ipc`・`postMessage`・`runCallback`・`callbacks` のプロパティ自体は `Object.defineProperty` に `value` だけを渡して定義され、`writable: false`・`configurable: false` のため置き換えられない(包めるのは `window.chrome.webview.postMessage`・`window.fetch` と、`callbacks` の Map のインスタンスの `get`)
 - 不成立とした方式(判断の記録。根拠と実測は research.md): `network`(CDP 越しのページのネットワーク要求 `http://ipc.localhost/<cmd>` の購読)は、上記の CSP の拒否により IPC が最初からネットワーク要求にならず、CDP の Network・Fetch ドメインにも `page.on("request")` にも 0 件だったため不成立。`invoke`(`__TAURI_INTERNALS__.invoke` の包み込み)は、プロパティが書き換え不可のため不成立。どちらも廃止し、`ipcCommandFromUrl`・`installInvokeRecorder` は持たない
 
@@ -570,7 +573,8 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 |---|---|---|
 | 準備物の不足 | SetupProject | 一覧と準備のコマンドで失敗 |
 | `AppLaunchError` | AppLauncher | 理由と出力の末尾で失敗、プロセスを終了 |
-| `HostActionError` | WindowsHost | 理由つきで失敗 |
+| `HostActionError` | WindowsHost | 理由つきで失敗。キー入力は前面にならなければ何も送らずに失敗する(6.5) |
+| アプリ終了後の OS の操作の呼び出し | WebviewFixtures(`hostCallRefusal`) | OS の操作を送らず、終了の状態を含む理由つきで失敗(pid の再利用による誤送信の防止) |
 | 製品の不具合 | シナリオ | `test.fixme` と注釈、README と traceability に記録 |
 | 後始末の失敗 | AppLauncher | 警告の注釈 |
 

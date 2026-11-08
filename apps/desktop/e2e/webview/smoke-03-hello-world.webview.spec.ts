@@ -33,7 +33,9 @@ test.describe("スモーク 3.1: Hello World の実行", () => {
     await expect.poll(() => debuggerPage.statusValue("実行数")).toBe(906);
 
     // 要求が出たことと、Rust からの応答(runCallback)が返ったことを観測する
-    await Promise.all([loaded.completed, started.completed, batched.completed]);
+    // 完了の成否も確かめる(エラーの応答で解決しても、成功でなければ失敗にする)
+    const results = await Promise.all([loaded.completed, started.completed, batched.completed]);
+    expect(results.map((result) => result.ok)).toEqual([true, true, true]);
     const commands = await ipc.commands();
     const first = (name: string): number => commands.indexOf(name);
     expect(first("load_source")).toBeGreaterThanOrEqual(0);

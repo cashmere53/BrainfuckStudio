@@ -55,7 +55,7 @@ type FakeWindow = {
   __TAURI_INTERNALS__: Record<string, unknown>;
   __bfE2eClose?: number;
   __bfE2eMarker?: string;
-  __bfIpc?: { seq: number; entries: { id: number; cmd: string; done: number }[] };
+  __bfIpc?: { seq: number; entries: { id: number; cmd: string; done: number; ok: boolean | null }[] };
   addEventListener: ReturnType<typeof vi.fn>;
   [key: string]: unknown;
 };
@@ -197,6 +197,39 @@ describe("observeIpc(postMessage) の完了の記録", () => {
     expect(ipc.win.__bfIpc?.entries[0]?.done).toBeGreaterThan(0);
   });
 
+  it("完了の成否を記録する: callback の id で引くと ok: true、error の id で引くと ok: false、未完了は null", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(30, "value");
+    ipc.callbacks.set(31, "error-value");
+
+    ipc.send("load_source", 30, 32);
+    ipc.send("run_batch", 33, 31);
+    expect(ipc.win.__bfIpc?.entries.map((e) => e.ok)).toEqual([null, null]);
+
+    ipc.complete(30);
+    expect(ipc.win.__bfIpc?.entries[0]?.ok).toBe(true);
+    expect(ipc.win.__bfIpc?.entries[1]?.ok).toBeNull();
+
+    ipc.complete(31);
+    expect(ipc.win.__bfIpc?.entries[1]?.ok).toBe(false);
+    expect(ipc.win.__bfIpc?.entries[0]?.ok).toBe(true);
+  });
+
+  it("成否は最初に引かれた応答で確定し、後の取得で書き換えない", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(40, "value");
+
+    ipc.send("set_document_dirty", 40, 41);
+    ipc.complete(41);
+    ipc.complete(40);
+
+    expect(ipc.win.__bfIpc?.entries[0]?.ok).toBe(false);
+  });
+
   it("記録していない id の get は完了を付けず、結果をそのまま返す", async () => {
     const ipc = makeIpcWindow();
     useWindow(ipc.win);
@@ -320,7 +353,37 @@ describe("observeIpc(postMessage) の待ち受けの確定", () => {
     // 確定の後の同じコマンドの完了で解決する
     ipc.send("set_document_dirty", 5, 6);
     ipc.complete(5);
-    await expect(armed.completed).resolves.toBeUndefined();
+    await expect(armed.completed).resolves.toEqual({ ok: true });
+  });
+
+  it("completed は完了した応答の成否で解決する: callback は { ok: true }、error は { ok: false }(エラーでも解決する)", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    const succeeded = await observer.armResponse("load_source");
+    ipc.send("load_source", 50, 51);
+    ipc.complete(50);
+    await expect(succeeded.completed).resolves.toEqual({ ok: true });
+
+    const failed = await observer.armResponse("start_session");
+    ipc.send("start_session", 52, 53);
+    ipc.complete(53);
+    await expect(failed.completed).resolves.toEqual({ ok: false });
+  });
+
+  it("completed の成否は、確定の後に完了した同じコマンドの応答から取る(確定の前の成功は拾わない)", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.send("run_batch", 60, 61);
+    ipc.complete(60);
+    const armed = await observer.armResponse("run_batch");
+    ipc.send("run_batch", 62, 63);
+    ipc.complete(63);
+
+    await expect(armed.completed).resolves.toEqual({ ok: false });
   });
 
   it("確定の直前に完了した応答(確定の時点の連番と同じ)を拾わない", async () => {
@@ -353,7 +416,7 @@ describe("observeIpc(postMessage) の待ち受けの確定", () => {
     const armed = await observer.armResponse("run_batch");
     ipc.complete(1);
 
-    await expect(armed.completed).resolves.toBeUndefined();
+    await expect(armed.completed).resolves.toEqual({ ok: true });
   });
 
   it("completed は未処理の拒否にならない", async () => {

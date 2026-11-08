@@ -6,9 +6,6 @@ import { fileURLToPath } from "node:url";
 /** apps/desktop(このファイルは apps/desktop/e2e/support/webview にある) */
 export const DESKTOP_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
-/** 画面のビルド成果物(`npm run build` の出力。上流の DIST_INDEX_PATH と同じ) */
-export const DIST_INDEX_PATH = path.join(DESKTOP_ROOT, "dist", "index.html");
-
 /** 組み込みの画面の配信オリジン(Windows の Tauri 2 の既定) */
 export const APP_ORIGIN = "http://tauri.localhost";
 

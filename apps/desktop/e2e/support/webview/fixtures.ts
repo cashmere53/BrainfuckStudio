@@ -8,8 +8,40 @@ import { DebuggerPage } from "../pages/DebuggerPage.ts";
 import { appBinaryPath, APP_ORIGIN, userDataRoot } from "./paths.ts";
 import { IPC_OBSERVATION_MODE, observeIpc, type IpcObserver } from "./appProbes.ts";
 import { AppLaunchError, launchApp, readyWithinMsFromEnv, type LaunchedApp } from "./appProcess.ts";
-import { shouldCollectFailureMaterials } from "./fixtureFailure.ts";
+import { hostCallRefusal, shouldCollectFailureMaterials } from "./fixtureFailure.ts";
 import { bindWindowsHost, type BoundWindowsHost } from "./windowsHost.ts";
+
+/**
+ * pid に束ねた OS の窓口を、アプリが終了していない間だけ呼べるように包む。
+ * 終了した後に呼ばれたら、OS の操作を送らずに理由つきで失敗する(pid の再利用で別のウィンドウへ届くのを防ぐ)。
+ */
+function guardedHost(launched: LaunchedApp): BoundWindowsHost {
+  const host = bindWindowsHost(launched.pid);
+  const guard = (operation: string): void => {
+    const refusal = hostCallRefusal(launched.exit, operation, launched.pid);
+    if (refusal !== null) {
+      throw new Error(refusal);
+    }
+  };
+  return {
+    async windowTitle() {
+      guard("windowTitle");
+      return host.windowTitle();
+    },
+    async requestClose() {
+      guard("requestClose");
+      return host.requestClose();
+    },
+    async sendKeys(keys: string) {
+      guard("sendKeys");
+      return host.sendKeys(keys);
+    },
+    async contextMenuOpen() {
+      guard("contextMenuOpen");
+      return host.contextMenuOpen();
+    },
+  };
+}
 
 /** シナリオに渡す実アプリの一式 */
 export interface WebviewApp {
@@ -99,7 +131,7 @@ export const test = base.extend<WebviewFixtures, { browser: Browser }>({
         process: launched,
         page,
         debuggerPage,
-        host: bindWindowsHost(launched.pid),
+        host: guardedHost(launched),
         ipc,
       });
     } finally {

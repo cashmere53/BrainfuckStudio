@@ -172,7 +172,7 @@ E2E は実ウィンドウと WebView2 の挙動を検証しません。次は別
 
 ## E2E テスト(実アプリ・WebView2)
 
-ブラウザのスイートとは別に、実アプリ(`brainfuck-studio.exe` の debug ビルド)を起動し、WebView2 の上で検証する webview スイートがあります。**Windows 専用**です(PowerShell の補助スクリプト `pwsh`、`taskkill /T /F`、WebView2 を使います)。シナリオは `apps/desktop/e2e/webview/` にあり、支援のコードは `apps/desktop/e2e/support/webview/` にあります。
+ブラウザのスイートとは別に、実アプリ(`brainfuck-studio.exe` の debug ビルド)を起動し、WebView2 の上で検証する webview スイートがあります。**Windows 専用**です(Windows PowerShell 5.1 の `powershell.exe` で動かす補助スクリプト、`taskkill /T /F`、WebView2 を使います)。シナリオは `apps/desktop/e2e/webview/` にあり、支援のコードは `apps/desktop/e2e/support/webview/` にあります。
 
 以下のコマンドはすべて `apps/desktop` で実行します。
 
@@ -199,6 +199,7 @@ mise exec node@26 -- npm run e2e:webview                         # 準備と実�
 | --- | --- |
 | `E2E_APP_BIN` | 実アプリの実行ファイルを明示する。未指定なら `CARGO_TARGET_DIR` の下の `debug/`、それも無ければ `src-tauri/target/debug/` の `brainfuck-studio.exe` |
 | `E2E_APP_READY_MS` | アプリのデバッグ用の口が応答するまで待つ上限のミリ秒。既定は 60000。正の整数以外は既定になります。ウイルス対策ソフトの検査などで起動が遅いときに延ばします |
+| `E2E_PORT` | 配信ポート(`vite preview` が使う)。未指定なら、`npm run e2e:webview:run` が空きポートを選びます。指定すると、その番号を使います |
 
 アプリのデバッグ用の口(CDP)のポートは、シナリオごとに空きポートを自動で選びます。指定する手段はありません。
 

@@ -105,7 +105,13 @@ export async function runLauncher(argv: readonly string[], deps: LauncherDeps): 
     }
     return 1;
   }
-  const port = await deps.freePort();
+  let port: number;
+  try {
+    port = await deps.freePort();
+  } catch (error) {
+    console.error(`空きポートを取得できませんでした(E2E_PORT を指定すると取得を省けます): ${String(error)}`);
+    return 1;
+  }
   const run = buildWebviewRun(argv, deps.env, port);
   const result = deps.spawn(run);
   if (result.error !== undefined) {
@@ -121,7 +127,13 @@ const isEntry =
   entry !== undefined &&
   path.resolve(entry).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
 if (isEntry) {
-  runLauncher(process.argv.slice(2), defaultLauncherDeps()).then((code) => {
-    process.exitCode = code;
-  });
+  runLauncher(process.argv.slice(2), defaultLauncherDeps())
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error: unknown) => {
+      // 想定外の例外(未処理の拒否にせず、理由を出して終了コード 1 にする)
+      console.error(`ランチャの実行に失敗しました: ${String(error)}`);
+      process.exitCode = 1;
+    });
 }

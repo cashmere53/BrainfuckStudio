@@ -7,7 +7,6 @@ import {
   APP_EXE_NAME,
   APP_ORIGIN,
   DESKTOP_ROOT,
-  DIST_INDEX_PATH,
   IPC_URL_PREFIX,
   WINDOWS_HOST_SCRIPT_PATH,
   appBinaryPath,
@@ -51,9 +50,6 @@ describe("定数(配信オリジン・IPC の接頭辞・実行ファイル名�
     expect(path.dirname(WINDOWS_HOST_SCRIPT_PATH)).toBe(fileURLToPath(new URL(".", import.meta.url)).replace(/[\\/]$/, ""));
   });
 
-  it("画面のビルド成果物のパスは上流の DIST_INDEX_PATH と同じ apps/desktop/dist/index.html", () => {
-    expect(DIST_INDEX_PATH).toBe(path.join(DESKTOP_ROOT, "dist", "index.html"));
-  });
 });
 
 describe("userDataRoot(一時的な利用者データのフォルダの根)", () => {

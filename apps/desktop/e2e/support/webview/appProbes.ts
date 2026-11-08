@@ -21,18 +21,24 @@ export interface IpcObserver {
   readonly mode: IpcObservationMode;
   /** 観測した要求のコマンド名(順序どおり) */
   commands(): Promise<readonly string[]>;
-  /** 待ち受けを確定してから返る。completed は、確定以降に完了したそのコマンドの応答で解決する */
-  armResponse(command: string): Promise<{ readonly completed: Promise<void> }>;
+  /**
+   * 待ち受けを確定してから返る。completed は、確定以降に完了したそのコマンドの応答で解決し、
+   * 応答の成否(callback なら ok: true、error なら ok: false)を返す(エラーでも解決する)
+   */
+  armResponse(command: string): Promise<{ readonly completed: Promise<{ readonly ok: boolean }> }>;
 }
 
-/** ページ内に残す 1 件の要求。done は完了した時点の連番(0 は未完了) */
-type IpcEntry = { id: number; cmd: string; done: number };
+/** ページ内に残す 1 件の要求。done は完了した時点の連番(0 は未完了)。ok は完了の成否(未完了は null) */
+type IpcEntry = { id: number; cmd: string; done: number; ok: boolean | null };
+
+/** callback または error の id に対応する要求と、その id が成功(callback)か失敗(error)かの区分 */
+type IpcCallbackRef = { entry: IpcEntry; ok: boolean };
 
 /** ページ内に残す観測の記録。seq は単調な連番(要求と完了の両方で進む) */
 type IpcRecord = {
   seq: number;
   entries: IpcEntry[];
-  byCallback: Map<number, IpcEntry>;
+  byCallback: Map<number, IpcCallbackRef>;
 };
 
 /** ページ内の窓口(型だけに使う。ページ内の関数の本体は値を外から受け取らない) */
@@ -52,7 +58,8 @@ type ProbeWindow = {
  * - 内部 API(callbacks の Map、chrome.webview.postMessage)が無ければ理由つきで失敗する(Tauri の変更の早期検出)
  * - 二重に設置しない(設置済みなら何もしない)
  * - 要求: postMessage に渡る JSON から cmd・callback・error を取って記録する。元の呼び出しと戻り値はそのまま
- * - 完了: runCallback が記録した callback または error の id を callbacks.get で引いた時点で done を付ける
+ * - 完了: runCallback が記録した callback または error の id を callbacks.get で引いた時点で done を付ける。
+ *   成否は引かれた id の種類で決める(callback の id なら ok: true、error の id なら ok: false)
  * - 念のため window.fetch の ipc.localhost 宛ても記録する(CSP が変わって fetch 方式に戻った場合の保険)
  */
 function installIpcRecorder(): string {
@@ -85,13 +92,13 @@ function installIpcRecorder(): string {
       const msg: unknown = typeof data === "string" ? JSON.parse(data) : data;
       if (msg !== null && typeof msg === "object" && typeof (msg as { cmd?: unknown }).cmd === "string") {
         const m = msg as { cmd: string; callback?: unknown; error?: unknown };
-        const entry: IpcEntry = { id: ++rec.seq, cmd: m.cmd, done: 0 };
+        const entry: IpcEntry = { id: ++rec.seq, cmd: m.cmd, done: 0, ok: null };
         rec.entries.push(entry);
         if (typeof m.callback === "number") {
-          rec.byCallback.set(m.callback, entry);
+          rec.byCallback.set(m.callback, { entry, ok: true });
         }
         if (typeof m.error === "number") {
-          rec.byCallback.set(m.error, entry);
+          rec.byCallback.set(m.error, { entry, ok: false });
         }
       }
     } catch {
@@ -104,8 +111,9 @@ function installIpcRecorder(): string {
   const originalGet = callbacks.get as (this: unknown, key: unknown) => unknown;
   (callbacks as { get: unknown }).get = function (this: unknown, key: unknown): unknown {
     const hit = typeof key === "number" ? rec.byCallback.get(key) : undefined;
-    if (hit !== undefined && hit.done === 0) {
-      hit.done = ++rec.seq;
+    if (hit !== undefined && hit.entry.done === 0) {
+      hit.entry.done = ++rec.seq;
+      hit.entry.ok = hit.ok;
     }
     return originalGet.call(this, key);
   };
@@ -125,20 +133,22 @@ function installIpcRecorder(): string {
       } catch {
         // 壊れたエンコードは生の名前のまま記録する
       }
-      const entry: IpcEntry = { id: ++rec.seq, cmd, done: 0 };
+      const entry: IpcEntry = { id: ++rec.seq, cmd, done: 0, ok: null };
       rec.entries.push(entry);
-      const finish = (): void => {
+      const finish = (ok: boolean): void => {
         if (entry.done === 0) {
           entry.done = ++rec.seq;
+          entry.ok = ok;
         }
       };
       return originalFetch.call(this, input, init).then(
         (response) => {
-          finish();
+          // 応答が決まった時点。HTTP の成否(ok が false)を失敗とする
+          finish((response as { ok?: unknown } | null)?.ok !== false);
           return response;
         },
         (error: unknown) => {
-          finish();
+          finish(false);
           throw error;
         },
       );
@@ -166,6 +176,7 @@ export async function observeIpc(page: Page, mode: IpcObservationMode): Promise<
     async armResponse(command) {
       // 確定の時点の連番。これより後に完了した同じコマンドの応答だけを数える(確定前の完了は拾わない)
       const armedAt = await page.evaluate(() => (window as unknown as ProbeWindow).__bfIpc?.seq ?? 0);
+      // 完了の確定の後に、その要求の成否を読む(エラーの応答でも解決し、呼び出し側が ok を確かめられる)
       const completed = page
         .waitForFunction(
           ([name, after]) =>
@@ -174,7 +185,17 @@ export async function observeIpc(page: Page, mode: IpcObservationMode): Promise<
             ),
           [command, armedAt] as const,
         )
-        .then(() => undefined);
+        .then(() =>
+          page.evaluate(
+            ([name, after]) => {
+              const entry = ((window as unknown as ProbeWindow).__bfIpc?.entries ?? []).find(
+                (e) => e.cmd === name && e.done > after,
+              );
+              return { ok: entry?.ok === true };
+            },
+            [command, armedAt] as const,
+          ),
+        );
       // 呼び出し側が待たなくても未処理の拒否にしない
       completed.catch(() => undefined);
       return { completed };
