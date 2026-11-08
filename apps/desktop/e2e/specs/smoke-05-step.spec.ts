@@ -50,36 +50,15 @@ test.describe("スモーク 5: Step", () => {
     expect(await debuggerPage.statusValue("実行数")).toBe(EXPECTED_PCS_AFTER_STEP.length);
   });
 
-  // 製品の不具合の記録: 終端で状態ラベルは「正常終了」になるが、Step と Run は有効なまま(要件 4.8 は停止状態での Run と Step の無効を求める)。
-  // 原因: apps/desktop/src/state/debuggerStore.ts の applyStep は、最後の 1 命令の応答(executed)では phase を
-  // idle のまま返し、停止の確定(halted)は次の Step の応答まで反映されない。応答の result.state.snapshot.halted も
-  // lastStop === "halted" も見ていない。ラベルは runLabel.ts が lastStop から導くため「正常終了」になり、
-  // controls.ts は phase: idle を見るため Run と Step が有効になる。
-  // 追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」。
-  test.fixme(
-    "終端で Step・Run・Pause が無効、Reset が有効になる",
-    {
-      annotation: {
-        type: "issue",
-        description:
-          "製品の不具合: 最後の命令を Step で実行した直後、状態ラベルは「正常終了」だが Step と Run が有効なまま。" +
-          "原因: apps/desktop/src/state/debuggerStore.ts の applyStep が executed の応答で phase を idle のままにする。" +
-          "applyStep は executed の応答で result.state.snapshot.halted や lastStop === \"halted\" を見ていない。" +
-          "ラベルは runLabel.ts が lastStop から導くため「正常終了」になり、controls.ts は phase: idle を見るため Run と Step が有効になる。" +
-          "上流の要件: .kiro/specs/desktop-gui/requirements.md の 4.7・4.8(Step で最後の命令を終えたら正常終了を表示し、停止状態では Run と Step を無効にする)。" +
-          "e2e 側の要件: .kiro/specs/desktop-gui-e2e-browser/requirements.md の 5.3。" +
-          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」",
-      },
-    },
-    async ({ debuggerPage }) => {
-      await stepLoopToEnd(debuggerPage);
+  // 終端で Step・Run・Pause が無効、Reset が有効になる(desktop-gui の PR #12 で修正済み。要件 4.7・4.8)
+  test("終端で Step・Run・Pause が無効、Reset が有効になる", async ({ debuggerPage }) => {
+    await stepLoopToEnd(debuggerPage);
 
-      await expect(debuggerPage.button("Step")).toBeDisabled();
-      await expect(debuggerPage.button("Run")).toBeDisabled();
-      await expect(debuggerPage.button("Pause")).toBeDisabled();
-      await expect(debuggerPage.button("Reset")).toBeEnabled();
-    },
-  );
+    await expect(debuggerPage.button("Step")).toBeDisabled();
+    await expect(debuggerPage.button("Run")).toBeDisabled();
+    await expect(debuggerPage.button("Pause")).toBeDisabled();
+    await expect(debuggerPage.button("Reset")).toBeEnabled();
+  });
 
   test("長いソースで Step すると、次の命令が表示範囲の外にあっても現在命令の強調が表示範囲に入る", async ({
     debuggerPage,
