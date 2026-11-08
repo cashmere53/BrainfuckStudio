@@ -3,7 +3,7 @@
 #   runtime : WebView2 の版(EdgeUpdate の pv。HKLM の WOW6432Node、HKCU の順)
 #   window  : プロセスの主ウィンドウ(表示中で所有者の無いトップレベル)のタイトル
 #   close   : 主ウィンドウへ WM_SYSCOMMAND/SC_CLOSE を送る(× ボタンと同じ OS の経路)
-#   keys    : WScript.Shell の AppActivate で前面化し、前面になったら SendKeys を送る
+#   keys    : 前面化(AppActivate → 復元と入力の接続による前面化)し、前面になったら SendKeys を送る。前面にならなければ何も送らない
 #   menu    : 対象プロセスと子孫に属する既定のコンテキストメニュー(UI Automation の Menu)の有無
 param(
     [Parameter(Mandatory = $true)]
@@ -57,9 +57,34 @@ public static class BfHostWin32
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetFocus(IntPtr hWnd);
+
     private const uint GW_OWNER = 4;
     private const uint WM_SYSCOMMAND = 0x0112;
     private const long SC_CLOSE = 0xF060;
+    private const int SW_RESTORE = 9;
 
     public static IntPtr FindMainWindow(uint processId)
     {
@@ -96,6 +121,54 @@ public static class BfHostWin32
         uint pid;
         GetWindowThreadProcessId(GetForegroundWindow(), out pid);
         return pid;
+    }
+
+    public static uint ThreadIdOf(IntPtr hWnd)
+    {
+        uint pid;
+        return GetWindowThreadProcessId(hWnd, out pid);
+    }
+
+    // 前面化ロックの回避。最小化なら復元し、現在の前面のスレッドと対象のスレッドへ入力を一時的に接続して
+    // 前面化を要求する。キーは送らない。接続は必ず finally で解除する。
+    public static bool ForceForeground(IntPtr target)
+    {
+        if (IsIconic(target))
+        {
+            ShowWindow(target, SW_RESTORE);
+        }
+        uint own = GetCurrentThreadId();
+        uint foregroundThread = ThreadIdOf(GetForegroundWindow());
+        uint targetThread = ThreadIdOf(target);
+        bool attachedForeground = false;
+        bool attachedTarget = false;
+        try
+        {
+            if (foregroundThread != 0 && foregroundThread != own)
+            {
+                attachedForeground = AttachThreadInput(own, foregroundThread, true);
+            }
+            if (targetThread != 0 && targetThread != own && targetThread != foregroundThread)
+            {
+                attachedTarget = AttachThreadInput(own, targetThread, true);
+            }
+            BringWindowToTop(target);
+            bool result = SetForegroundWindow(target);
+            SetActiveWindow(target);
+            SetFocus(target);
+            return result;
+        }
+        finally
+        {
+            if (attachedTarget)
+            {
+                AttachThreadInput(own, targetThread, false);
+            }
+            if (attachedForeground)
+            {
+                AttachThreadInput(own, foregroundThread, false);
+            }
+        }
     }
 }
 '@
@@ -180,6 +253,29 @@ function Write-KeysResult([bool]$Delivered, [object]$Reason) {
     Write-Line (ConvertTo-Json -Compress @{ action = 'keys'; delivered = $Delivered; reason = $Reason })
 }
 
+# 対象のプロセスが前面になるまで、指定のミリ秒まで短く待つ(前面になったら真)
+function Wait-Foreground([int]$Milliseconds) {
+    $target = [uint32]$ProcessId
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($Milliseconds)
+    while (([BfHostWin32]::ForegroundProcessId() -ne $target) -and ([DateTime]::UtcNow -lt $deadline)) {
+        Start-Sleep -Milliseconds 50
+    }
+    return ([BfHostWin32]::ForegroundProcessId() -eq $target)
+}
+
+# 診断用の前面のプロセス名(取得できなければ $null)
+function Get-ForegroundProcessName {
+    $foregroundId = [BfHostWin32]::ForegroundProcessId()
+    if ($foregroundId -eq 0) {
+        return $null
+    }
+    $process = Get-Process -Id ([int]$foregroundId) -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        return $null
+    }
+    return $process.ProcessName
+}
+
 function Invoke-Keys {
     $handle = Get-MainWindowHandle
     if ($handle.ToInt64() -eq 0) {
@@ -189,15 +285,21 @@ function Invoke-Keys {
     $target = [uint32]$ProcessId
     Add-Type -AssemblyName System.Windows.Forms
     $shell = New-Object -ComObject WScript.Shell
-    # AppActivate の戻り値は、最小化からの復帰の途中では偽になりうるため、判定は前面の確認で行う
+    # (1) 従来どおり AppActivate。戻り値は判定に使わず、前面の確認で判定する(最小化からの復帰には時間がかかる)
     [void]$shell.AppActivate($ProcessId)
-    # 最小化からの復帰には時間がかかるため、前面になるまで最大 2 秒ほど待つ
-    $deadline = [DateTime]::UtcNow.AddSeconds(2)
-    while (([BfHostWin32]::ForegroundProcessId() -ne $target) -and ([DateTime]::UtcNow -lt $deadline)) {
-        Start-Sleep -Milliseconds 50
+    $activated = Wait-Foreground 2000
+    # (2) 前面にならなければ、復元と入力の接続で前面化を要求する(キーは送らない)
+    if (-not $activated) {
+        [void][BfHostWin32]::ForceForeground($handle)
+        $activated = Wait-Foreground 2000
     }
-    if ([BfHostWin32]::ForegroundProcessId() -ne $target) {
-        Write-KeysResult $false '前面化できません'
+    if (-not $activated) {
+        $reason = '前面化できません'
+        $foregroundName = Get-ForegroundProcessName
+        if ($null -ne $foregroundName) {
+            $reason = "$reason(前面は $foregroundName のままでした)"
+        }
+        Write-KeysResult $false $reason
         return
     }
     # 送信の直前にも前面を確かめる(待ちの後に別のウィンドウへ移っていないか)
