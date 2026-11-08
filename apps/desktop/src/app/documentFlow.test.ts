@@ -239,6 +239,22 @@ describe("文書フロー: 未保存フラグの同期(Rust 側の閉じる確�
     ]);
   });
 
+  it("編集して保存時点の内容へ戻すと、解除の false を Rust 側へ送る(取り消しで未保存が消えた状態と一致させる)", async () => {
+    const { workspace, backend } = setup({ setDocumentDirty: () => undefined });
+    const original = workspace.getSnapshot().source;
+
+    workspace.setSource(`${original}+`);
+    await settle();
+    workspace.setSource(original);
+    await settle();
+
+    expect(workspace.getSnapshot().document.dirty).toBe(false);
+    expect(backend.calls.filter((call) => call.method === "setDocumentDirty").map((call) => call.args[0])).toEqual([
+      true,
+      false,
+    ]);
+  });
+
   it("同期の失敗は通知する", async () => {
     const { workspace, notices } = setup({ setDocumentDirty: () => Promise.reject(IO_FAILURE) });
 

@@ -384,10 +384,42 @@ describe("Step 応答 stepResult(待機中のみ有効)", () => {
     expect(s.scrollRequest).toBe(true);
   });
 
-  it("最後の命令で正常終了は停止状態になり、スクロール要求を立てる", () => {
+  it("最後の命令で正常終了は停止状態になり、スクロール要求を立てる(Rust の `halted` 応答)", () => {
     const s = apply(started(), { type: "stepResult", result: { outcome: { kind: "halted" }, state: dto(7, { lastStop: "halted" }) } });
     expect(s.phase).toBe("halted");
     expect(s.scrollRequest).toBe(true);
+  });
+
+  it("最後の命令で正常終了した Step は、Rust の実際の応答(outcome: executed かつ lastStop: halted)でも停止状態になる", () => {
+    // Rust の step_into は最後の命令でも outcome: executed を返し、同時に lastStop = halted と snapshot.halted を記録する
+    const finished = dto(7, {
+      stepsExecuted: 6,
+      lastStop: "halted",
+      snapshot: { pc: 6, dp: 0, currentCell: 0, stepsExecuted: 6, halted: true },
+    });
+    const s = apply(started(), { type: "stepResult", result: { outcome: { kind: "executed" }, state: finished } });
+    expect(s.phase).toBe("halted");
+    expect(s.state).toBe(finished);
+    expect(s.localPaused).toBe(false);
+    expect(s.error).toBeNull();
+    expect(s.scrollRequest).toBe(true);
+    expect(deriveRunLabel({ phase: s.phase, inputValid: true, stoppedByPause: s.localPaused }, s.state)).toBe("正常終了");
+  });
+
+  it("最後の命令で正常終了した後は、実行・Step の操作が無効になる(停止状態の phase は idle ではない)", () => {
+    const s = apply(started(), {
+      type: "stepResult",
+      result: { outcome: { kind: "executed" }, state: dto(7, { lastStop: "halted", snapshot: { pc: 6, dp: 0, currentCell: 0, stepsExecuted: 6, halted: true } }) },
+    });
+    expect(s.phase).not.toBe("idle");
+    expect(debuggerReducer(s, { type: "runStarted" })).toBe(s);
+  });
+
+  it("通常の Step(outcome: executed で lastStop が halted でない)は待機のまま", () => {
+    const s = apply(started(), { type: "stepResult", result: { outcome: { kind: "executed" }, state: dto(7, { lastStop: null, stepsExecuted: 1 }) } });
+    expect(s.phase).toBe("idle");
+    const bp = apply(started(), { type: "stepResult", result: { outcome: { kind: "executed" }, state: dto(7, { lastStop: "breakpoint", stepsExecuted: 1 }) } });
+    expect(bp.phase).toBe("idle");
   });
 
   it("Step の実行エラーは失敗状態・実行エラーになり、スクロール要求を立てる", () => {

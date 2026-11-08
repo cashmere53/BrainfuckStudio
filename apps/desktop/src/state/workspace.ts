@@ -39,6 +39,11 @@ export type StepLimitInput = {
 
 export type WorkspaceState = {
   source: string;
+  /**
+   * 基準のソース(最後に開いた/保存した/新規で作った時点の内容)。未保存は `source !== baselineSource` で決まる(要件 2.2)。
+   * 取り消しで基準と同じ内容に戻れば未保存は解除される。
+   */
+  baselineSource: string;
   document: DocumentState;
   input: InputModel;
   limit: StepLimitInput;
@@ -78,8 +83,10 @@ export type WorkspaceStore = {
 };
 
 function initialState(): WorkspaceState {
+  const source = normalizeNewlines(getHelloSource());
   return {
-    source: normalizeNewlines(getHelloSource()),
+    source,
+    baselineSource: source,
     document: { fileName: null, dirty: false, lossyNotice: false },
     input: { mode: "text", text: "" },
     limit: {
@@ -120,26 +127,34 @@ export function createWorkspace(): WorkspaceStore {
       if (normalized === state.source) {
         return;
       }
-      commit({ ...state, source: normalized, document: { ...state.document, dirty: true } });
+      // 未保存は基準のソースとの比較で決める(取り消しで基準と同じ内容に戻れば解除される)
+      commit({
+        ...state,
+        source: normalized,
+        document: { ...state.document, dirty: normalized !== state.baselineSource },
+      });
     },
 
     markSaved(savedSource, fileName) {
       // 紐づけ先は保存の結果そのもの(保存中の編集の有無に関係なく更新する)
       const nextName = fileName === undefined ? state.document.fileName : fileName;
-      // 未保存は「保存時点のソース」と現在のソースの比較で決める(保存中の編集を未保存のまま残すため)
-      const dirty = state.source !== normalizeNewlines(savedSource);
-      if (dirty === state.document.dirty && nextName === state.document.fileName) {
+      // 保存時点のソースを新しい基準にする。未保存は現在のソースと基準の比較で決める(保存中の編集を未保存のまま残すため)
+      const baseline = normalizeNewlines(savedSource);
+      const dirty = state.source !== baseline;
+      if (dirty === state.document.dirty && nextName === state.document.fileName && baseline === state.baselineSource) {
         return;
       }
-      commit({ ...state, document: { ...state.document, dirty, fileName: nextName } });
+      commit({ ...state, baselineSource: baseline, document: { ...state.document, dirty, fileName: nextName } });
     },
 
     replaceDocument({ source, fileName, lossy }) {
       // 新規/開くでは文書を置換し、ブレークポイントを解除する(6.10)。
       // 置換は「文書の置換」というイベントなので、内容が同じでも無変更ガードは置かず常に通知する。
+      const normalized = normalizeNewlines(source);
       commit({
         ...state,
-        source: normalizeNewlines(source),
+        source: normalized,
+        baselineSource: normalized,
         document: { fileName, dirty: false, lossyNotice: lossy },
         breakpoints: [],
         documentRevision: state.documentRevision + 1,
@@ -151,6 +166,7 @@ export function createWorkspace(): WorkspaceStore {
       commit({
         ...state,
         source: "",
+        baselineSource: "",
         document: { fileName: null, dirty: false, lossyNotice: false },
         breakpoints: [],
         documentRevision: state.documentRevision + 1,
