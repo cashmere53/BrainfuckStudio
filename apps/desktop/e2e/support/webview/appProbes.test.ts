@@ -1,21 +1,17 @@
 // @vitest-environment node
 // AppProbes の単体テスト。実アプリも実ブラウザも使わず、偽の Page と偽の window で確かめる。
-// 偽の Page の evaluate は、関数はそのまま window の上で呼び、文字列は評価する(ページ内で実行される形を模す)。
+// 偽の Page の evaluate は、関数はそのまま window の上で呼ぶ(ページ内で実行される形を模す)。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Page } from "@playwright/test";
 import {
   bypassAppSuppression,
   installCloseEventCounter,
-  installInvokeRecorder,
   IPC_OBSERVATION_MODE,
-  ipcCommandFromUrl,
   observeIpc,
   placeNavigationMarker,
-  type IpcCallLog,
 } from "./appProbes.ts";
 
 type Handler = (arg: unknown) => void;
-type Invoke = (cmd: string, ...rest: unknown[]) => Promise<unknown>;
 
 /** 偽の Page。on で登録したイベントを emit で発火し、evaluate・waitForFunction はグローバルの window で動かす */
 function makeFakePage(mainFrame: object = { name: "main" }) {
@@ -32,11 +28,8 @@ function makeFakePage(mainFrame: object = { name: "main" }) {
         handler(arg);
       }
     },
-    async evaluate(target: unknown, arg?: unknown) {
-      if (typeof target === "string") {
-        return (0, eval)(target) as unknown;
-      }
-      return (target as (a: unknown) => unknown)(arg);
+    async evaluate(target: (a?: unknown) => unknown, arg?: unknown) {
+      return target(arg);
     },
     async waitForFunction(target: (a: unknown) => unknown, arg: unknown) {
       for (let attempt = 0; attempt < 2000; attempt += 1) {
@@ -53,17 +46,18 @@ function makeFakePage(mainFrame: object = { name: "main" }) {
   };
 }
 
-/** 偽の要求。url() だけを持つ */
-function fakeRequest(url: string) {
-  return { url: () => url };
+/** 指定の時間だけ待つ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 type FakeWindow = {
   __TAURI_INTERNALS__: Record<string, unknown>;
-  __bfE2eIpc?: IpcCallLog;
   __bfE2eClose?: number;
   __bfE2eMarker?: string;
+  __bfIpc?: { seq: number; entries: { id: number; cmd: string; done: number }[] };
   addEventListener: ReturnType<typeof vi.fn>;
+  [key: string]: unknown;
 };
 
 function makeFakeWindow(invoke: (cmd: string, args?: unknown) => Promise<unknown>): FakeWindow {
@@ -73,6 +67,38 @@ function makeFakeWindow(invoke: (cmd: string, args?: unknown) => Promise<unknown
       transformCallback: vi.fn(),
     },
     addEventListener: vi.fn(),
+  };
+}
+
+/**
+ * IPC の観測の偽のページ内。postMessage(要求の送信)と callbacks(Map。応答の runCallback が引く)を持つ。
+ * `complete(id)` は Tauri の runCallback と同じく callbacks.get(id) を引いて応答を模す。
+ */
+function makeIpcWindow(
+  options: { callbacks?: unknown; webview?: unknown; post?: (data: unknown) => unknown } = {},
+) {
+  const callbacks = options.callbacks ?? new Map<number, unknown>();
+  // post は元の postMessage の spy。設置の後の webview.postMessage は包み込みになるため、元の呼び出しは post で確かめる
+  const post = vi.fn(options.post ?? ((data: unknown): unknown => ({ posted: data })));
+  const webview = options.webview ?? { postMessage: post };
+  const win = makeFakeWindow(async () => undefined);
+  win.__TAURI_INTERNALS__.callbacks = callbacks;
+  win.chrome = { webview };
+  return {
+    win,
+    post,
+    webview: webview as { postMessage: (data: unknown) => unknown },
+    callbacks: callbacks as Map<number, unknown>,
+    /** 要求を送る(Tauri の ipc.postMessage と同じく JSON 文字列) */
+    send(cmd: string, callback: number, error: number) {
+      return (win.chrome as { webview: { postMessage: (d: string) => unknown } }).webview.postMessage(
+        JSON.stringify({ cmd, callback, error, options: { customProtocolIpcBlocked: true } }),
+      );
+    },
+    /** 応答を返す(runCallback が callbacks.get を引く) */
+    complete(id: number) {
+      return (win.__TAURI_INTERNALS__.callbacks as Map<number, unknown>).get(id);
+    },
   };
 }
 
@@ -86,162 +112,375 @@ afterEach(() => {
   (globalThis as { window?: unknown }).window = previousWindow;
 });
 
-function useWindow(win: FakeWindow): void {
+function useWindow(win: object): void {
   (globalThis as { window?: unknown }).window = win;
 }
 
 describe("IPC_OBSERVATION_MODE", () => {
-  it("初期値はネットワーク要求の方式", () => {
-    expect(IPC_OBSERVATION_MODE).toBe("network");
+  it("既定の方式は postMessage", () => {
+    expect(IPC_OBSERVATION_MODE).toBe("postMessage");
   });
 });
 
-describe("ipcCommandFromUrl", () => {
-  it("IPC の URL からコマンド名を取り出す", () => {
-    expect(ipcCommandFromUrl("http://ipc.localhost/load_source")).toBe("load_source");
-    expect(ipcCommandFromUrl("http://ipc.localhost/set_document_dirty")).toBe("set_document_dirty");
+describe("observeIpc(postMessage) の要求の記録", () => {
+  it("要求の cmd と callback を順序どおりに記録し、commands で返す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.send("load_source", 1, 2);
+    ipc.send("set_document_dirty", 3, 4);
+
+    expect(observer.mode).toBe("postMessage");
+    expect(await observer.commands()).toEqual(["load_source", "set_document_dirty"]);
+    expect(ipc.win.__bfIpc?.entries.map((e) => e.cmd)).toEqual(["load_source", "set_document_dirty"]);
   });
 
-  it("エンコードされた名前を復号する", () => {
-    expect(ipcCommandFromUrl("http://ipc.localhost/plugin%3Aevent%7Clisten")).toBe(
-      "plugin:event|listen",
-    );
+  it("cmd を持たないメッセージ・JSON でない文字列は記録せず、元の postMessage には渡す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.webview.postMessage("not json");
+    ipc.webview.postMessage({ other: 1 });
+
+    expect(ipc.post).toHaveBeenCalledTimes(2);
+    expect(await observer.commands()).toEqual([]);
+    expect(ipc.win.__bfIpc?.entries).toEqual([]);
   });
 
-  it("クエリと断片を名前に含めない", () => {
-    expect(ipcCommandFromUrl("http://ipc.localhost/run_batch?x=1")).toBe("run_batch");
-    expect(ipcCommandFromUrl("http://ipc.localhost/run_batch#frag")).toBe("run_batch");
-  });
+  it("元の postMessage の引数と戻り値、呼び出しの this をそのまま保つ", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
 
-  it("IPC 以外の URL・名前が空の URL・壊れたエンコードは null", () => {
-    expect(ipcCommandFromUrl("http://tauri.localhost/index.html")).toBeNull();
-    expect(ipcCommandFromUrl("https://example.com/load_source")).toBeNull();
-    expect(ipcCommandFromUrl("http://ipc.localhost/")).toBeNull();
-    expect(ipcCommandFromUrl("http://ipc.localhost/%E0%A4%A")).toBeNull();
-  });
-});
+    const data = JSON.stringify({ cmd: "run_batch", callback: 5, error: 6 });
+    const returned = ipc.webview.postMessage(data);
 
-describe("installInvokeRecorder", () => {
-  it("呼び出しの名前を記録し、成功した結果をそのまま返す", async () => {
-    const result = { ok: true };
-    const original = vi.fn<Invoke>(async () =>result);
-    const internals: { invoke: Invoke } = { invoke: original };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals, log);
-    const returned = await internals.invoke("run_batch", { args: {} });
-
-    expect(returned).toBe(result);
-    expect(log.calls).toEqual(["run_batch"]);
-    expect(log.completed).toEqual({ run_batch: 1 });
-    expect(original).toHaveBeenCalledWith("run_batch", { args: {} });
-  });
-
-  it("拒否された例外をそのまま投げ直し、完了の回数を数える", async () => {
-    const failure = new Error("boom");
-    const internals: { invoke: Invoke } = {
-      invoke: vi.fn<Invoke>(async () =>Promise.reject(failure)),
-    };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals, log);
-    const caught = await internals.invoke("load_source").catch((error: unknown) => error);
-
-    expect(caught).toBe(failure);
-    expect(log.calls).toEqual(["load_source"]);
-    expect(log.completed).toEqual({ load_source: 1 });
-  });
-
-  it("同期の例外もそのまま投げ、完了として数える", () => {
-    const failure = new Error("sync");
-    const internals: { invoke: Invoke } = {
-      invoke: vi.fn<Invoke>(() => {
-        throw failure;
-      }),
-    };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals, log);
-
-    expect(() => internals.invoke("start_session")).toThrow(failure);
-    expect(log.completed).toEqual({ start_session: 1 });
-  });
-
-  it("同じコマンドの呼び出しと完了を別々に数える", async () => {
-    const internals: { invoke: Invoke } = { invoke: vi.fn<Invoke>(async () =>1) };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals, log);
-    await internals.invoke("set_document_dirty", { args: { dirty: true } });
-    await internals.invoke("set_document_dirty", { args: { dirty: false } });
-
-    expect(log.calls).toEqual(["set_document_dirty", "set_document_dirty"]);
-    expect(log.completed).toEqual({ set_document_dirty: 2 });
-  });
-
-  it("二重に適用しても包み込みは 1 回だけ", async () => {
-    const internals: { invoke: Invoke } = { invoke: vi.fn<Invoke>(async () =>1) };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals, log);
-    installInvokeRecorder(internals, log);
-    await internals.invoke("load_source");
-
-    expect(log.calls).toEqual(["load_source"]);
-    expect(log.completed).toEqual({ load_source: 1 });
+    expect(returned).toEqual({ posted: data });
+    expect(ipc.post.mock.calls).toEqual([[data]]);
+    expect(ipc.post.mock.contexts[0]).toBe(ipc.webview);
   });
 });
 
-describe("observeIpc(network)", () => {
-  it("IPC の要求の URL からコマンド名を順序どおりに集め、IPC 以外は含めない", async () => {
+describe("observeIpc(postMessage) の完了の記録", () => {
+  it("callbacks.get が記録した callback id で呼ばれると done を単調に増やし、元の結果をそのまま返す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(7, "first");
+    ipc.callbacks.set(9, "second");
+
+    ipc.send("set_document_dirty", 7, 8);
+    ipc.send("load_source", 9, 10);
+
+    expect(ipc.complete(7)).toBe("first");
+    const afterFirst = ipc.win.__bfIpc?.entries.map((e) => e.done) ?? [];
+    expect(ipc.complete(9)).toBe("second");
+    const afterSecond = ipc.win.__bfIpc?.entries.map((e) => e.done) ?? [];
+
+    expect(afterFirst[0]).toBeGreaterThan(0);
+    expect(afterFirst[1]).toBe(0);
+    expect(afterSecond[1]).toBeGreaterThan(afterFirst[0] ?? 0);
+  });
+
+  it("error の id でも完了として記録する", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(20, "ok-value");
+    ipc.callbacks.set(21, "err-value");
+
+    ipc.send("run_batch", 20, 21);
+    expect(ipc.complete(21)).toBe("err-value");
+
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBeGreaterThan(0);
+  });
+
+  it("記録していない id の get は完了を付けず、結果をそのまま返す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(99, "unrelated");
+
+    ipc.send("load_source", 1, 2);
+    expect(ipc.complete(99)).toBe("unrelated");
+
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBe(0);
+  });
+
+  it("記録していない id・callbacks に無い id(404)の get は、元の結果 undefined をそのまま返す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.send("load_source", 1, 2);
+    expect(ipc.complete(404)).toBeUndefined();
+    expect(ipc.complete(99)).toBeUndefined();
+
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBe(0);
+  });
+
+  it("記録した id でも、元の値が undefined・null・0 のときは値を変えずに返す", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    await observeIpc(makeFakePage(), "postMessage");
+    ipc.callbacks.set(1, undefined);
+    ipc.callbacks.set(2, null);
+    ipc.callbacks.set(3, 0);
+
+    ipc.send("undefined_result", 1, 10);
+    ipc.send("null_result", 2, 11);
+    ipc.send("zero_result", 3, 12);
+
+    expect(ipc.complete(1)).toBeUndefined();
+    expect(ipc.complete(2)).toBeNull();
+    expect(ipc.complete(3)).toBe(0);
+    const entries = ipc.win.__bfIpc?.entries ?? [];
+    expect(entries.map((e) => e.done)).toEqual([expect.any(Number), expect.any(Number), expect.any(Number)]);
+    expect(entries.every((e) => e.done > 0)).toBe(true);
+  });
+});
+
+describe("observeIpc(postMessage) の元の postMessage が例外を投げる場合", () => {
+  it("例外をそのまま伝え、要求は 1 件記録し、元の postMessage は 1 回呼ばれる", async () => {
+    const ipc = makeIpcWindow({
+      post: () => {
+        throw new Error("boom");
+      },
+    });
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    expect(() => ipc.send("load_source", 1, 2)).toThrow("boom");
+    expect(await observer.commands()).toEqual(["load_source"]);
+    expect(ipc.post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("observeIpc(postMessage) の直列化", () => {
+  it("page.evaluate に渡す関数の文字列だけで、偽の窓の下に設置でき、外側のスコープに依存しない", async () => {
+    const ipc = makeIpcWindow();
+    // 設置の evaluate だけ捕まえ、関数の文字列を取る(実行は下で、偽の窓の下で行う)
+    const sources: string[] = [];
     const page = makeFakePage();
-    const observer = await observeIpc(page, "network");
+    (page as unknown as { evaluate: (target: unknown) => Promise<unknown> }).evaluate = async (target: unknown) => {
+      sources.push(String(target));
+      return "stub";
+    };
+    await observeIpc(page, "postMessage");
 
-    page.emit("request", fakeRequest("http://ipc.localhost/load_source"));
-    page.emit("request", fakeRequest("http://tauri.localhost/app.js"));
-    page.emit("request", fakeRequest("http://ipc.localhost/run_batch"));
+    expect(sources).toHaveLength(1);
+    const src = sources[0] ?? "";
+    expect(src).not.toContain("__name");
 
-    expect(observer.mode).toBe("network");
-    expect(await observer.commands()).toEqual(["load_source", "run_batch"]);
+    // ページ内で動かす: window と Request を引数で渡し、モジュールのスコープは見えない
+    class StubRequest {}
+    const run = new Function("window", "Request", `return (${src})();`) as (w: unknown, r: unknown) => unknown;
+    expect(run(ipc.win, StubRequest)).toBe("installed");
+
+    ipc.callbacks.set(7, "value");
+    ipc.send("load_source", 7, 8);
+    expect(ipc.win.__bfIpc?.entries.map((e) => e.cmd)).toEqual(["load_source"]);
+    expect(ipc.complete(7)).toBe("value");
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBeGreaterThan(0);
+    expect(ipc.post).toHaveBeenCalledTimes(1);
+
+    expect(run(ipc.win, StubRequest)).toBe("already");
   });
+});
 
-  it("待ち受けの確定の後に完了した同じコマンドの応答で completed が解決する", async () => {
-    const page = makeFakePage();
-    const observer = await observeIpc(page, "network");
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/set_document_dirty"));
+describe("observeIpc(postMessage) の待ち受けの確定", () => {
+  it("確定の後に完了した同じコマンドの応答で解決し、確定の前の完了・別のコマンドの完了では解決しない", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    // 確定の前に完了した応答(以前の要求)
+    ipc.send("set_document_dirty", 1, 2);
+    ipc.complete(1);
 
     const armed = await observer.armResponse("set_document_dirty");
     let settled = false;
-    void armed.completed.then(() => {
-      settled = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    armed.completed.then(
+      () => {
+        settled = true;
+      },
+      () => undefined,
+    );
+    await sleep(5);
     expect(settled).toBe(false);
 
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/load_source"));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // 別のコマンドの完了では解決しない
+    ipc.send("load_source", 3, 4);
+    ipc.complete(3);
+    await sleep(5);
     expect(settled).toBe(false);
 
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/set_document_dirty"));
+    // 確定の後の同じコマンドの完了で解決する
+    ipc.send("set_document_dirty", 5, 6);
+    ipc.complete(5);
     await expect(armed.completed).resolves.toBeUndefined();
+  });
+
+  it("確定の直前に完了した応答(確定の時点の連番と同じ)を拾わない", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.send("set_document_dirty", 1, 2);
+    ipc.complete(1);
+    // 最後に起きた出来事が完了の記録。確定の連番はその完了の連番と等しい
+
+    const armed = await observer.armResponse("set_document_dirty");
+    let settled = false;
+    armed.completed.then(
+      () => {
+        settled = true;
+      },
+      () => undefined,
+    );
+    await sleep(5);
+    expect(settled).toBe(false);
+  });
+
+  it("確定の後の要求の完了は、要求が確定の前に送られていても解決する", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    ipc.send("run_batch", 1, 2);
+    const armed = await observer.armResponse("run_batch");
+    ipc.complete(1);
+
+    await expect(armed.completed).resolves.toBeUndefined();
+  });
+
+  it("completed は未処理の拒否にならない", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const page = makeFakePage();
+    // 待ちが失敗する(時間切れ相当)ページを模す。completed の拒否を呼び出し側が待たなくても未処理にしないこと
+    (page as unknown as { waitForFunction: () => Promise<never> }).waitForFunction = async () => {
+      throw new Error("timeout");
+    };
+    const observer = await observeIpc(page, "postMessage");
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      await observer.armResponse("never");
+      await sleep(5);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });
 
-describe("observeIpc(invoke)", () => {
-  it("接続後に包んだ invoke の呼び出しを観測し、待ち受けの後の完了で解決する", async () => {
-    const win = makeFakeWindow(async () => "done");
+describe("observeIpc(postMessage) の設置の失敗", () => {
+  it("callbacks が Map でなければ理由つきで失敗する", async () => {
+    const ipc = makeIpcWindow({ callbacks: {} });
+    useWindow(ipc.win);
+
+    await expect(observeIpc(makeFakePage(), "postMessage")).rejects.toThrow(/callbacks/);
+  });
+
+  it("chrome.webview.postMessage が無ければ理由つきで失敗する", async () => {
+    const ipc = makeIpcWindow({ webview: {} });
+    useWindow(ipc.win);
+
+    await expect(observeIpc(makeFakePage(), "postMessage")).rejects.toThrow(/postMessage/);
+  });
+
+  it("chrome が無ければ理由つきで失敗する", async () => {
+    const win = makeFakeWindow(async () => undefined);
+    win.__TAURI_INTERNALS__.callbacks = new Map();
     useWindow(win);
+
+    await expect(observeIpc(makeFakePage(), "postMessage")).rejects.toThrow(/postMessage/);
+  });
+});
+
+describe("observeIpc(postMessage) の二重の設置", () => {
+  it("2 回設置しても包み込みは 1 回だけで、要求は 1 回だけ記録され、元の postMessage も 1 回だけ呼ばれる", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
     const page = makeFakePage();
+    const first = await observeIpc(page, "postMessage");
+    const postAfterFirst = ipc.webview.postMessage;
+    const getAfterFirst = ipc.callbacks.get;
+    const recordAfterFirst = ipc.win.__bfIpc;
+    const second = await observeIpc(page, "postMessage");
 
-    const observer = await observeIpc(page, "invoke");
-    expect(observer.mode).toBe("invoke");
+    // 2 回目は何も包み直さず、記録も置き換えない(同じ関数・同じ記録のまま)
+    expect(ipc.webview.postMessage).toBe(postAfterFirst);
+    expect(ipc.callbacks.get).toBe(getAfterFirst);
+    expect(ipc.win.__bfIpc).toBe(recordAfterFirst);
 
-    const armed = await observer.armResponse("set_document_dirty");
-    await (win.__TAURI_INTERNALS__.invoke as (cmd: string) => Promise<unknown>)("set_document_dirty");
-    await expect(armed.completed).resolves.toBeUndefined();
+    ipc.send("load_source", 1, 2);
+    ipc.complete(1);
 
-    expect(await observer.commands()).toEqual(["set_document_dirty"]);
-    expect(win.__bfE2eIpc?.completed).toEqual({ set_document_dirty: 1 });
+    expect(await first.commands()).toEqual(["load_source"]);
+    expect(await second.commands()).toEqual(["load_source"]);
+    expect(ipc.post).toHaveBeenCalledTimes(1);
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBeGreaterThan(0);
+  });
+
+  it("2 回目の設置で応答の get を包み直さない(完了は 1 回だけ付く)", async () => {
+    const ipc = makeIpcWindow();
+    useWindow(ipc.win);
+    const page = makeFakePage();
+    await observeIpc(page, "postMessage");
+    const doneAfterFirst = ipc.win.__bfIpc?.seq ?? 0;
+    await observeIpc(page, "postMessage");
+
+    ipc.send("load_source", 1, 2);
+    ipc.complete(1);
+    ipc.complete(1);
+
+    expect(ipc.win.__bfIpc?.seq).toBe(doneAfterFirst + 2);
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBe(doneAfterFirst + 2);
+  });
+});
+
+describe("observeIpc(postMessage) の fetch の保険", () => {
+  it("ipc.localhost 宛ての fetch を記録し、応答の決まった時点で完了にする", async () => {
+    let resolveFetch: (value: unknown) => void = () => undefined;
+    const fetchFn = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    const ipc = makeIpcWindow();
+    (ipc.win as { fetch?: unknown }).fetch = fetchFn;
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    const pending = (ipc.win as unknown as { fetch: (u: string) => Promise<unknown> }).fetch(
+      "http://ipc.localhost/load%5Fsource?x=1",
+    );
+    expect(await observer.commands()).toEqual(["load_source"]);
+    expect(fetchFn).toHaveBeenCalledWith("http://ipc.localhost/load%5Fsource?x=1", undefined);
+
+    resolveFetch("response");
+    await expect(pending).resolves.toBe("response");
+    expect(ipc.win.__bfIpc?.entries[0]?.done).toBeGreaterThan(0);
+  });
+
+  it("ipc.localhost 以外の fetch は記録せず、そのまま返す", async () => {
+    const fetchFn = vi.fn(async () => "other");
+    const ipc = makeIpcWindow();
+    (ipc.win as { fetch?: unknown }).fetch = fetchFn;
+    useWindow(ipc.win);
+    const observer = await observeIpc(makeFakePage(), "postMessage");
+
+    const result = await (ipc.win as unknown as { fetch: (u: string) => Promise<unknown> }).fetch(
+      "http://tauri.localhost/app.js",
+    );
+
+    expect(result).toBe("other");
+    expect(await observer.commands()).toEqual([]);
   });
 });
 
@@ -320,107 +559,6 @@ describe("bypassAppSuppression", () => {
     const event = { stopImmediatePropagation: vi.fn() };
     calls[0]?.[1](event);
     expect(event.stopImmediatePropagation).toHaveBeenCalledTimes(1);
-  });
-});
-
-/** 指定の時間だけ待つ */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** 応答を後から制御できる偽の invoke。呼ばれた順に pending へ積み、resolve で応答を返す */
-function controlledInvoke() {
-  const pending: { cmd: string; resolve: (value: unknown) => void }[] = [];
-  const invoke = (cmd: string) =>
-    new Promise<unknown>((resolve) => {
-      pending.push({ cmd, resolve });
-    });
-  return { invoke, pending };
-}
-
-describe("ipcCommandFromUrl の接頭辞の位置", () => {
-  it("接頭辞が URL の途中や別のホストにあるだけなら null", () => {
-    expect(ipcCommandFromUrl("https://example.com/?u=http://ipc.localhost/load_source")).toBeNull();
-    expect(ipcCommandFromUrl("http://ipc.localhost.evil/x")).toBeNull();
-    expect(ipcCommandFromUrl("https://ipc.localhost/x")).toBeNull();
-  });
-});
-
-describe("observeIpc(invoke) の待ち受けの確定", () => {
-  it("確定の前に完了した同じコマンドの応答・別のコマンドの完了では解決せず、確定の後の同じコマンドの完了で解決する", async () => {
-    const control = controlledInvoke();
-    const win = makeFakeWindow(control.invoke);
-    useWindow(win);
-    const page = makeFakePage();
-    const observer = await observeIpc(page, "invoke");
-    const call = win.__TAURI_INTERNALS__.invoke as (cmd: string) => Promise<unknown>;
-
-    // 確定の前に 1 回完了させる(以前の応答)
-    const before = call("set_document_dirty");
-    control.pending[0]?.resolve(1);
-    await before;
-
-    const armed = await observer.armResponse("set_document_dirty");
-    let settled = false;
-    void armed.completed.then(() => {
-      settled = true;
-    });
-    await sleep(5);
-    expect(settled).toBe(false);
-
-    // 別のコマンドの完了では解決しない
-    const other = call("load_source");
-    control.pending[1]?.resolve(2);
-    await other;
-    await sleep(5);
-    expect(settled).toBe(false);
-
-    // 確定の後の同じコマンドの完了で解決する
-    const after = call("set_document_dirty");
-    control.pending[2]?.resolve(3);
-    await after;
-    await expect(armed.completed).resolves.toBeUndefined();
-  });
-});
-
-describe("observeIpc(network) の別コマンドの取り違え", () => {
-  it("別のコマンドの完了が複数あっても解決せず、確定の後の同じコマンドの完了で初めて解決する", async () => {
-    const page = makeFakePage();
-    const observer = await observeIpc(page, "network");
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/set_document_dirty"));
-
-    const armed = await observer.armResponse("set_document_dirty");
-    let settled = false;
-    void armed.completed.then(() => {
-      settled = true;
-    });
-
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/load_source"));
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/load_source"));
-    await sleep(5);
-    expect(settled).toBe(false);
-
-    page.emit("requestfinished", fakeRequest("http://ipc.localhost/set_document_dirty"));
-    await expect(armed.completed).resolves.toBeUndefined();
-  });
-});
-
-describe("installInvokeRecorder の this", () => {
-  it("元の invoke を internals を this にして呼ぶ", async () => {
-    const seenThis: unknown[] = [];
-    const internals = {
-      invoke: function (this: unknown, cmd: string) {
-        seenThis.push(this);
-        return Promise.resolve(cmd);
-      },
-    };
-    const log: IpcCallLog = { calls: [], completed: {} };
-
-    installInvokeRecorder(internals as unknown as { invoke: Invoke }, log);
-    await internals.invoke("load_source");
-
-    expect(seenThis).toHaveLength(1);
-    expect(seenThis[0]).toBe(internals);
   });
 });
 

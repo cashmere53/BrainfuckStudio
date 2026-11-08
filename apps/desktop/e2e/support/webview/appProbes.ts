@@ -1,37 +1,21 @@
 // webview の E2E の実アプリのページの観測の補助(AppProbes)。製品のコードは変えず、ページの外から観測する。
-// - IPC の観測(2 つの方式。既定は network、切り替え先は invoke。方式は IPC_OBSERVATION_MODE の 1 つの定数で選ぶ)
+// - IPC の観測(方式は postMessage の 1 つ。IPC_OBSERVATION_MODE で選ぶ)
 // - close-requested の受信の計数、ページ内の目印によるナビゲーションの検出、抑止の無効化(陽性対照)
 // ページ内で実行する関数(page.evaluate に渡すもの)は自己完結させ、モジュールのスコープの値を参照しない。
+//
+// IPC の観測の根拠(実アプリで確認済み): 製品の CSP(connect-src 未指定)が Tauri の fetch 方式の IPC を拒否するため、
+// Tauri は window.chrome.webview.postMessage に切り替える。要求はネットワークに出ず、応答は Rust が
+// webview.eval で __TAURI_INTERNALS__.runCallback(id, data) を呼んで返す。ネットワークの観測や invoke の包み込みでは
+// 取れないため、postMessage の包み込み(要求)と callbacks の get の包み込み(完了)で観測する。
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { CLOSE_REQUESTED_EVENT } from "../../../src/ipc/backend.ts";
-import { IPC_URL_PREFIX } from "./paths.ts";
 
-/**
- * IPC の URL からコマンド名を取り出す(純粋関数)。
- * IPC の接頭辞で始まらない URL・名前が空の URL・壊れたエンコードは null。クエリと断片は名前に含めない。
- */
-export function ipcCommandFromUrl(url: string): string | null {
-  if (!url.startsWith(IPC_URL_PREFIX)) {
-    return null;
-  }
-  const rest = url.slice(IPC_URL_PREFIX.length).split(/[?#]/)[0] ?? "";
-  if (rest === "") {
-    return null;
-  }
-  try {
-    const name = decodeURIComponent(rest);
-    return name === "" ? null : name;
-  } catch {
-    return null;
-  }
-}
+/** IPC の観測の方式。現在は postMessage の 1 つ(実アプリで動作を確認済み) */
+export type IpcObservationMode = "postMessage";
 
-/** network: CDP 越しのページのネットワーク要求(request / requestfinished)。invoke: ページ内の __TAURI_INTERNALS__.invoke の包み込み(切り替え先) */
-export type IpcObservationMode = "network" | "invoke";
-
-/** フィクスチャが使う方式。2.3 の実アプリでの確認で確定する(初期値は "network") */
-export const IPC_OBSERVATION_MODE: IpcObservationMode = "network";
+/** フィクスチャが使う方式 */
+export const IPC_OBSERVATION_MODE: IpcObservationMode = "postMessage";
 
 export interface IpcObserver {
   readonly mode: IpcObservationMode;
@@ -41,8 +25,15 @@ export interface IpcObserver {
   armResponse(command: string): Promise<{ readonly completed: Promise<void> }>;
 }
 
-/** invoke の方式がページ内に残す記録 */
-export type IpcCallLog = { calls: string[]; completed: Record<string, number> };
+/** ページ内に残す 1 件の要求。done は完了した時点の連番(0 は未完了) */
+type IpcEntry = { id: number; cmd: string; done: number };
+
+/** ページ内に残す観測の記録。seq は単調な連番(要求と完了の両方で進む) */
+type IpcRecord = {
+  seq: number;
+  entries: IpcEntry[];
+  byCallback: Map<number, IpcEntry>;
+};
 
 /** ページ内の窓口(型だけに使う。ページ内の関数の本体は値を外から受け取らない) */
 type ProbeWindow = {
@@ -50,128 +41,145 @@ type ProbeWindow = {
     invoke(cmd: string, args?: unknown): Promise<unknown>;
     transformCallback(callback: (value: unknown) => void): number;
   };
-  __bfE2eIpc?: IpcCallLog;
+  __bfIpc?: IpcRecord;
   __bfE2eClose?: number;
   __bfE2eCloseInstalled?: boolean;
   __bfE2eMarker?: string;
 };
 
 /**
- * invoke の方式の本体。internals.invoke を包み、コマンド名の呼び出しと完了を log に記録する。
- * 元の結果と例外はそのまま返す。page.evaluate に文字列で渡されるため、自己完結させ、名前付きの内側の関数を使わない。
- * 二重に適用された場合は何もしない。
+ * ページ内の観測器(postMessage の包み込みと callbacks.get の包み込み)を設置する。page.evaluate に渡すため自己完結させる。
+ * - 内部 API(callbacks の Map、chrome.webview.postMessage)が無ければ理由つきで失敗する(Tauri の変更の早期検出)
+ * - 二重に設置しない(設置済みなら何もしない)
+ * - 要求: postMessage に渡る JSON から cmd・callback・error を取って記録する。元の呼び出しと戻り値はそのまま
+ * - 完了: runCallback が記録した callback または error の id を callbacks.get で引いた時点で done を付ける
+ * - 念のため window.fetch の ipc.localhost 宛ても記録する(CSP が変わって fetch 方式に戻った場合の保険)
  */
-export function installInvokeRecorder(
-  internals: { invoke: (cmd: string, ...rest: unknown[]) => Promise<unknown> },
-  log: IpcCallLog,
-): void {
-  const original = internals.invoke;
-  if ((original as unknown as { __bfRecorder?: boolean }).__bfRecorder === true) {
-    return;
+function installIpcRecorder(): string {
+  const w = window as unknown as {
+    __bfIpc?: IpcRecord;
+    __TAURI_INTERNALS__?: { callbacks?: unknown };
+    chrome?: { webview?: { postMessage?: unknown } };
+    fetch?: (input: unknown, init?: unknown) => Promise<unknown>;
+  };
+  const callbacks = w.__TAURI_INTERNALS__?.callbacks;
+  if (!(callbacks instanceof Map)) {
+    throw new Error("IPC の観測の設置に失敗: __TAURI_INTERNALS__.callbacks が Map でない(Tauri の内部 API が変わった可能性)");
   }
-  const wrapped = function (cmd: string, ...rest: unknown[]): Promise<unknown> {
-    log.calls.push(cmd);
-    let result: Promise<unknown>;
+  const webview = w.chrome?.webview;
+  if (webview === undefined || typeof webview.postMessage !== "function") {
+    throw new Error("IPC の観測の設置に失敗: window.chrome.webview.postMessage が無い(Tauri の内部 API が変わった可能性)");
+  }
+  if (w.__bfIpc !== undefined) {
+    return "already";
+  }
+
+  const rec: IpcRecord = { seq: 0, entries: [], byCallback: new Map() };
+  w.__bfIpc = rec;
+
+  // 要求: 元の postMessage を呼び、戻り値をそのまま返す。記録の失敗はアプリに影響させない
+  const originalPost = webview.postMessage as (this: unknown, ...args: unknown[]) => unknown;
+  (webview as { postMessage: unknown }).postMessage = function (this: unknown, ...args: unknown[]): unknown {
     try {
-      result = Promise.resolve(original.call(internals, cmd, ...rest));
-    } catch (error) {
-      log.completed[cmd] = (log.completed[cmd] ?? 0) + 1;
-      throw error;
-    }
-    return result.then(
-      (value) => {
-        log.completed[cmd] = (log.completed[cmd] ?? 0) + 1;
-        return value;
-      },
-      (error: unknown) => {
-        log.completed[cmd] = (log.completed[cmd] ?? 0) + 1;
-        throw error;
-      },
-    );
-  };
-  (wrapped as unknown as { __bfRecorder?: boolean }).__bfRecorder = true;
-  internals.invoke = wrapped;
-}
-
-/** 待ち受けの確定の時点の完了の回数を、その後に超えたら解決する待ちの 1 件 */
-type ResponseWaiter = { command: string; baseline: number; resolve: () => void };
-
-/** ネットワーク要求の方式: 要求の URL からコマンド名を取り、完了の回数を数える */
-function observeNetwork(page: Page): IpcObserver {
-  const commands: string[] = [];
-  const finished = new Map<string, number>();
-  let waiters: ResponseWaiter[] = [];
-
-  page.on("request", (request) => {
-    const name = ipcCommandFromUrl(request.url());
-    if (name !== null) {
-      commands.push(name);
-    }
-  });
-  page.on("requestfinished", (request) => {
-    const name = ipcCommandFromUrl(request.url());
-    if (name === null) {
-      return;
-    }
-    const count = (finished.get(name) ?? 0) + 1;
-    finished.set(name, count);
-    waiters = waiters.filter((waiter) => {
-      if (waiter.command === name && count > waiter.baseline) {
-        waiter.resolve();
-        return false;
+      const data = args[0];
+      const msg: unknown = typeof data === "string" ? JSON.parse(data) : data;
+      if (msg !== null && typeof msg === "object" && typeof (msg as { cmd?: unknown }).cmd === "string") {
+        const m = msg as { cmd: string; callback?: unknown; error?: unknown };
+        const entry: IpcEntry = { id: ++rec.seq, cmd: m.cmd, done: 0 };
+        rec.entries.push(entry);
+        if (typeof m.callback === "number") {
+          rec.byCallback.set(m.callback, entry);
+        }
+        if (typeof m.error === "number") {
+          rec.byCallback.set(m.error, entry);
+        }
       }
-      return true;
-    });
-  });
-
-  return {
-    mode: "network",
-    async commands() {
-      return [...commands];
-    },
-    async armResponse(command) {
-      const baseline = finished.get(command) ?? 0;
-      let resolve: () => void = () => undefined;
-      const completed = new Promise<void>((done) => {
-        resolve = done;
-      });
-      waiters.push({ command, baseline, resolve });
-      return { completed };
-    },
+    } catch {
+      // 観測の失敗は握りつぶす(要求の本体には影響させない)
+    }
+    return originalPost.apply(this, args);
   };
+
+  // 応答: runCallback(id) は callbacks.get(id) を引く。記録した id なら完了を付け、元の結果をそのまま返す
+  const originalGet = callbacks.get as (this: unknown, key: unknown) => unknown;
+  (callbacks as { get: unknown }).get = function (this: unknown, key: unknown): unknown {
+    const hit = typeof key === "number" ? rec.byCallback.get(key) : undefined;
+    if (hit !== undefined && hit.done === 0) {
+      hit.done = ++rec.seq;
+    }
+    return originalGet.call(this, key);
+  };
+
+  // 保険: fetch 方式の ipc.localhost 宛て。応答の Promise が決まった時点を完了とする
+  const originalFetch = w.fetch;
+  if (typeof originalFetch === "function") {
+    w.fetch = function (this: unknown, input: unknown, init?: unknown): Promise<unknown> {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : String(input);
+      const match = /^https?:\/\/ipc\.localhost\/([^?#]*)/.exec(url);
+      if (match === null) {
+        return originalFetch.call(this, input, init);
+      }
+      let cmd = match[1] ?? "";
+      try {
+        cmd = decodeURIComponent(cmd);
+      } catch {
+        // 壊れたエンコードは生の名前のまま記録する
+      }
+      const entry: IpcEntry = { id: ++rec.seq, cmd, done: 0 };
+      rec.entries.push(entry);
+      const finish = (): void => {
+        if (entry.done === 0) {
+          entry.done = ++rec.seq;
+        }
+      };
+      return originalFetch.call(this, input, init).then(
+        (response) => {
+          finish();
+          return response;
+        },
+        (error: unknown) => {
+          finish();
+          throw error;
+        },
+      );
+    };
+  }
+  return "installed";
 }
 
-/** invoke の方式: 接続後にページ内の invoke を包み、記録をページから読む */
-async function observeInvoke(page: Page): Promise<IpcObserver> {
-  // 関数の本体を文字列にしてページで評価する(installInvokeRecorder は外の値を参照しないため安全)。
-  const source = `(${installInvokeRecorder.toString()})(window.__TAURI_INTERNALS__, window.__bfE2eIpc = window.__bfE2eIpc ?? { calls: [], completed: {} })`;
-  await page.evaluate(source);
-
+/**
+ * 観測を設置する。接続直後に呼ぶ(設置の前の要求は観測の対象にならない)。
+ * 設置できなければ、理由つきで失敗する(ページの読み込みは変えない)。
+ */
+export async function observeIpc(page: Page, mode: IpcObservationMode): Promise<IpcObserver> {
+  if (mode !== "postMessage") {
+    throw new Error(`未知の IPC の観測の方式: ${String(mode)}`);
+  }
+  await page.evaluate(installIpcRecorder);
   return {
-    mode: "invoke",
+    mode: "postMessage",
     async commands() {
-      return page.evaluate(() => (window as unknown as ProbeWindow).__bfE2eIpc?.calls ?? []);
+      return page.evaluate(
+        () => ((window as unknown as ProbeWindow).__bfIpc?.entries ?? []).map((entry) => entry.cmd),
+      );
     },
     async armResponse(command) {
-      const baseline = await page.evaluate(
-        (name) => (window as unknown as ProbeWindow).__bfE2eIpc?.completed[name] ?? 0,
-        command,
-      );
+      // 確定の時点の連番。これより後に完了した同じコマンドの応答だけを数える(確定前の完了は拾わない)
+      const armedAt = await page.evaluate(() => (window as unknown as ProbeWindow).__bfIpc?.seq ?? 0);
       const completed = page
         .waitForFunction(
-          ([name, count]) =>
-            ((window as unknown as ProbeWindow).__bfE2eIpc?.completed[name] ?? 0) > count,
-          [command, baseline] as const,
+          ([name, after]) =>
+            ((window as unknown as ProbeWindow).__bfIpc?.entries ?? []).some(
+              (entry) => entry.cmd === name && entry.done > after,
+            ),
+          [command, armedAt] as const,
         )
         .then(() => undefined);
+      // 呼び出し側が待たなくても未処理の拒否にしない
+      completed.catch(() => undefined);
       return { completed };
     },
   };
-}
-
-/** 方式に応じて IPC の観測を始める。接続直後に呼ぶ(以前の要求は観測の対象にならない) */
-export async function observeIpc(page: Page, mode: IpcObservationMode): Promise<IpcObserver> {
-  return mode === "network" ? observeNetwork(page) : observeInvoke(page);
 }
 
 export interface CloseEventCounter {
