@@ -110,3 +110,26 @@ describe("playwright.config.ts のポートの配線(E2E_PORT)", () => {
     expect(web.command).toContain("--strictPort");
   });
 });
+
+describe("playwright.config.ts の再試行(起動直後の遅れへの備え)", () => {
+  beforeEach(() => {
+    vi.stubEnv("E2E_SKIP_PREREQ", "1");
+    vi.stubEnv("E2E_PORT", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("CI でなくても retries は 1 である(ローカルでも 1 回再試行する)", async () => {
+    vi.stubEnv("CI", "");
+    const config = await loadConfig();
+    expect(config.retries).toBe(1);
+  });
+
+  it("CI のときも retries は 1 である", async () => {
+    vi.stubEnv("CI", "1");
+    const config = await loadConfig();
+    expect(config.retries).toBe(1);
+  });
+});

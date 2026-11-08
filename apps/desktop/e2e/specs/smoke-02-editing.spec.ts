@@ -61,7 +61,7 @@ test.describe("スモーク 2: 編集", () => {
           "製品の不具合: Ctrl+Z で保存時点と同じ内容に戻っても documentStatus が「無題(未保存の変更あり)」のまま。" +
           "原因の候補: apps/desktop/src/state/workspace.ts の setSource が dirty を無条件に true にする。" +
           "上流の要件: .kiro/specs/desktop-gui/requirements.md の 2.2。e2e 側の要件: .kiro/specs/desktop-gui-e2e-browser/requirements.md の 4.2。" +
-          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」(タスク 8.2 で作成)",
+          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」",
       },
     },
     async ({ debuggerPage }) => {

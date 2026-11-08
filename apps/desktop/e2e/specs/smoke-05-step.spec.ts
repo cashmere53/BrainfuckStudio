@@ -55,7 +55,7 @@ test.describe("スモーク 5: Step", () => {
   // idle のまま返し、停止の確定(halted)は次の Step の応答まで反映されない。応答の result.state.snapshot.halted も
   // lastStop === "halted" も見ていない。ラベルは runLabel.ts が lastStop から導くため「正常終了」になり、
   // controls.ts は phase: idle を見るため Run と Step が有効になる。
-  // 追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」(タスク 8.2 で作成)。
+  // 追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」。
   test.fixme(
     "終端で Step・Run・Pause が無効、Reset が有効になる",
     {
@@ -68,7 +68,7 @@ test.describe("スモーク 5: Step", () => {
           "ラベルは runLabel.ts が lastStop から導くため「正常終了」になり、controls.ts は phase: idle を見るため Run と Step が有効になる。" +
           "上流の要件: .kiro/specs/desktop-gui/requirements.md の 4.7・4.8(Step で最後の命令を終えたら正常終了を表示し、停止状態では Run と Step を無効にする)。" +
           "e2e 側の要件: .kiro/specs/desktop-gui-e2e-browser/requirements.md の 5.3。" +
-          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」(タスク 8.2 で作成)",
+          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」",
       },
     },
     async ({ debuggerPage }) => {

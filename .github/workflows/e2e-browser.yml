@@ -58,9 +58,13 @@ jobs:
         id: e2e
         run: npm run e2e:run -- --project=chromium
 
+      # 通常の検証が失敗しても計測は実行する(計測の結果を残すため)。計測の報告は別の出力先に書き、通常の報告を上書きしない
       - name: E2E(時間計測。失敗しても job は失敗にしない)
         id: perf
+        if: always()
         continue-on-error: true
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-perf
         run: npm run e2e:run -- --project=perf
 
       - name: 失敗時の出力を保存
@@ -71,5 +75,14 @@ jobs:
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 計測の実測値を保存
+        if: ${{ always() && steps.perf.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-browser-perf
+          path: apps/desktop/playwright-report-perf/
           if-no-files-found: ignore
           retention-days: 14

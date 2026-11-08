@@ -136,6 +136,22 @@ async function expectRegionsInsideViewport(
   }
 }
 
+/**
+ * 全ボタンと全領域を 1 つずつスクロールで表示範囲に入れ、表示範囲に入ったことを確かめる(9.1 の「到達」)。
+ * 表示域が小さいときは末尾の要素を表示範囲へ動かすことになるため、端の要素が到達できることを確かめる。
+ */
+async function expectAllReachableByScroll(debuggerPage: DebuggerPage): Promise<void> {
+  for (const name of TOOLBAR_BUTTONS) {
+    const button = debuggerPage.button(name);
+    await button.scrollIntoViewIfNeeded();
+    await expect(button, `ボタン「${name}」の到達`).toBeInViewport();
+  }
+  for (const [name, locator] of Object.entries(regionsOf(debuggerPage)) as [RegionName, Locator][]) {
+    await locator.scrollIntoViewIfNeeded();
+    await expect(locator, `${name} の到達`).toBeInViewport();
+  }
+}
+
 /** テストごとの出力先(長いファイル名の保存に使う。無ければ作る) */
 function outputDir(testInfo: TestInfo): string {
   const dir = testInfo.outputPath("files");
@@ -145,13 +161,15 @@ function outputDir(testInfo: TestInfo): string {
 
 test.describe("スモーク 12: レイアウト", () => {
   for (const size of [SIZE_800_600, SIZE_1040_768]) {
-    test(`9.1 ${size.width}×${size.height}: 横方向のはみ出しが無く、各領域の右端が表示領域の内側にある`, async ({
+    test(`9.1 ${size.width}×${size.height}: 横方向のはみ出しが無く、各領域の右端が表示領域の内側にあり、スクロールで全ボタンと全領域に到達できる`, async ({
       debuggerPage,
     }) => {
       await debuggerPage.page.setViewportSize(size);
 
       await expectNoHorizontalOverflow(debuggerPage.page);
       await expectRegionsInsideViewport(debuggerPage, size);
+      // 到達の確認: 表示域が 800×600 でも 1040×768 でも、末尾のボタンと領域を表示範囲へ動かして確かめる
+      await expectAllReachableByScroll(debuggerPage);
     });
   }
 
@@ -220,15 +238,7 @@ test.describe("スモーク 12: レイアウト", () => {
     await expect(debuggerPage.region("状態"), "末端の領域(状態)の到達").toBeInViewport();
 
     // 1 つずつ表示範囲に入れてから、表示範囲に入ったことを確かめる
-    for (const name of TOOLBAR_BUTTONS) {
-      const button = debuggerPage.button(name);
-      await button.scrollIntoViewIfNeeded();
-      await expect(button, `ボタン「${name}」の到達`).toBeInViewport();
-    }
-    for (const [name, locator] of Object.entries(regionsOf(debuggerPage)) as [RegionName, Locator][]) {
-      await locator.scrollIntoViewIfNeeded();
-      await expect(locator, `${name} の到達`).toBeInViewport();
-    }
+    await expectAllReachableByScroll(debuggerPage);
   });
 
   test("9.2 800×600: ツールバーのボタンが 2 行以上に折り返される(操作の 4 つが 1 行目、ファイルと編集の 5 つが次の行以降)", async ({

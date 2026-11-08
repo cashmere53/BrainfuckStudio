@@ -45,6 +45,8 @@ export default defineConfig({
   reporter: CI
     ? [["list"], ["html", { open: "never" }], ["github"]]
     : [["list"], ["html", { open: "never" }]],
-  retries: CI ? 1 : 0,
+  // 起動直後の page.goto の遅れ(並列の負荷)に備え、CI とローカルの両方で 1 回だけ再試行する。
+  // 再試行で通ったものは flaky として報告に残る(README の「並列度と製品の不具合の記録」)
+  retries: 1,
   forbidOnly: CI,
 });

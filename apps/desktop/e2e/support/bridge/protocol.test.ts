@@ -41,6 +41,10 @@ describe("encodeLine(Node → ブリッジの行)", () => {
     ).toThrow(ProtocolError);
   });
 
+  it("payload が undefined の要求は、行に書かずに ProtocolError にする(JSON では値が消え、ブリッジが応答しなくなるため)", () => {
+    expect(() => encodeLine({ type: "request", id: 1, cmd: "e2e:ping", payload: undefined })).toThrow(ProtocolError);
+  });
+
   it("要求と返事は、JSON 1 つと末尾の改行 1 つだけの行にする(途中に改行は入れない)", () => {
     const request = { type: "request", id: 2, cmd: "e2e:ping", payload: { a: 1 } } as const;
     expect(encodeLine(request)).toBe(`${JSON.stringify(request)}\n`);

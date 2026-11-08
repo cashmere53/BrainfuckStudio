@@ -35,7 +35,7 @@ export interface E2eBackend {
   calls(cmd?: string): readonly RecordedCall[];
   /** 閉じる要求。確認が必要なときだけ閉じる要求のイベントを発火し、不要なら確認なしで閉じた扱いを返す */
   requestWindowClose(): Promise<WindowCloseResult>;
-  /** ページからの呼び出しを中継する(debuggerPage フィクスチャが exposeFunction に渡す。テストからは使わない) */
+  /** 中継して応答を返す。制御コマンド(`e2e:`)は記録しない。ページからの呼び出しは debuggerPage フィクスチャが exposeFunction に渡す。テストが直接使うのは起動の確認(e2e:ping)だけ */
   forward(cmd: string, payload: unknown): Promise<InvokeOutcome>;
 }
 

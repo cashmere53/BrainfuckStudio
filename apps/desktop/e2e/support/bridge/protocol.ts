@@ -85,6 +85,10 @@ export function encodeLine(message: ToBridge): string {
     if (!hasKey(value, "payload")) {
       throw new ProtocolError("request: payload が必要です(無い場合は null)");
     }
+    // JSON にすると undefined の値は消え、ブリッジは payload の無い行を受け取って応答しないため、書かずに拒否する
+    if (value.payload === undefined) {
+      throw new ProtocolError("request: payload は undefined ではなく null を指定してください");
+    }
     return `${JSON.stringify(value)}\n`;
   }
   if (value.type === "dialogResult") {
