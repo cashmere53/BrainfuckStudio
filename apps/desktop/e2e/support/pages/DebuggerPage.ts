@@ -74,6 +74,8 @@ export class DebuggerPage {
   readonly breakpointChars: Locator;
   /** 出力の総バイト数の表示(「総バイト数: N バイト」。出力の領域の中) */
   readonly outputTotal: Locator;
+  /** テープの表示半径のセレクタ(名前 "表示半径") */
+  readonly radiusSelect: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -98,6 +100,7 @@ export class DebuggerPage {
     this.runtimeErrors = page.locator(".cm-execution-runtime-error");
     this.breakpointChars = page.locator(".cm-breakpoint-char");
     this.outputTotal = this.region("出力").getByText(/^総バイト数: \d+ バイト$/);
+    this.radiusSelect = page.getByRole("combobox", { name: "表示半径", exact: true });
   }
 
   /** 状態領域の項目名(dt)。完全一致で探す。補助ラベルの色の検証に使う */
@@ -140,6 +143,13 @@ export class DebuggerPage {
   inputMode(mode: ViewMode): Locator {
     return this.page
       .getByRole("radiogroup", { name: "入力の形式", exact: true })
+      .getByRole("radio", { name: mode, exact: true });
+  }
+
+  /** 出力の表示形式の切替(出力の表示形式のラジオボタン。入力の形式と区別する) */
+  outputMode(mode: ViewMode): Locator {
+    return this.page
+      .getByRole("radiogroup", { name: "出力の表示形式", exact: true })
       .getByRole("radio", { name: mode, exact: true });
   }
 

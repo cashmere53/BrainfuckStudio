@@ -58,7 +58,10 @@ export function assertFocusRingSides(before: Record<Side, Uint8Array>, after: Re
 }
 
 /**
- * focus を実行して ring を持つ要素の outline の帯(4 辺)を求め、フォーカス時とブラー時の帯の画像が全辺で異なることを検証する。
+ * フォーカスした要素の outline の帯(4 辺)を求め、フォーカス時とブラー時の帯の画像が全辺で異なることを検証する。
+ * 製品は枠を :focus-visible(キーボード由来のフォーカス)でだけ描くため、枠の算出は必ず focus の後に読む。
+ * focus は、要素へフォーカスを移す操作(`focus()` の呼び出し、または `page.keyboard.press("Tab")` など)。
+ * 2 回目の focus は行わない(キーボードの移動では、もう一度押すと次の要素へ進んでしまうため)。
  * 枠の描画を確かめられないときは例外にする。
  */
 export async function expectFocusRingDrawn(
@@ -66,6 +69,8 @@ export async function expectFocusRingDrawn(
   options: { focus: () => Promise<void>; ring: Locator },
 ): Promise<void> {
   const { focus, ring } = options;
+  await focus();
+
   const style = await ring.evaluate((el) => {
     const s = getComputedStyle(el);
     return { outlineStyle: s.outlineStyle, outlineWidth: parseFloat(s.outlineWidth), outlineOffset: parseFloat(s.outlineOffset) };
@@ -79,13 +84,6 @@ export async function expectFocusRingDrawn(
   }
   const bands = outlineBands(box, style.outlineWidth, style.outlineOffset);
 
-  // ブラー時: 枠が無い状態の帯の画像
-  await page.evaluate(() => {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement) {
-      active.blur();
-    }
-  });
   const shoot = async (): Promise<Record<Side, Uint8Array>> => {
     const entries = await Promise.all(
       SIDES.map(async (side) => {
@@ -95,11 +93,26 @@ export async function expectFocusRingDrawn(
     );
     return Object.fromEntries(entries) as Record<Side, Uint8Array>;
   };
-  const blurred = await shoot();
 
   // フォーカス時: 枠が描かれた状態の帯の画像
-  await focus();
   const focused = await shoot();
+
+  // ブラー時: 枠が無い状態の帯の画像。ブラーの前にフォーカスの要素を控え、検査の後に同じ要素へ戻す
+  // (呼び出し側の続きの操作が、フォーカスした要素を前提にできるように。戻すのは focus 操作を繰り返さない)
+  const target = await page.evaluateHandle(() => document.activeElement);
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+  });
+  const blurred = await shoot();
+  await target.evaluate((element) => {
+    if (element instanceof HTMLElement) {
+      element.focus();
+    }
+  });
+  await target.dispose();
 
   assertFocusRingSides(blurred, focused);
 }

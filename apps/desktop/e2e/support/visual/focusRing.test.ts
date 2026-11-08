@@ -114,66 +114,93 @@ describe("assertFocusRingSides(4 辺すべての描画の判定)", () => {
 });
 
 // 以下は expectFocusRingDrawn の偽物の Locator と Page による検証。
-// 偽物の page は、focus() が呼ばれた後の screenshot に「描画あり」の画像を返す。
+// 偽物の要素は、フォーカスされている間だけ枠の算出スタイルを返す(製品の :focus-visible と同じ振る舞い)。
+// 偽物の page の screenshot は、フォーカスされている間だけ指定の辺に「描画あり」の画像を返す。
 type Style = { outlineStyle: string; outlineWidth: number; outlineOffset: number };
 const BOX = { x: 10, y: 20, width: 100, height: 50 };
+const NO_RING: Style = { outlineStyle: "none", outlineWidth: 0, outlineOffset: 0 };
 
-function fakeRing(style: Style, box: typeof BOX | null): Locator {
+/** フォーカスの状態(偽物の page と要素で共有する) */
+type FocusState = { focused: boolean };
+
+function fakeRing(
+  state: FocusState,
+  options: { focused: Style; blurred?: Style; box?: typeof BOX | null },
+): Locator {
   return {
-    evaluate: async () => style,
-    boundingBox: async () => box,
+    evaluate: async () => (state.focused ? options.focused : (options.blurred ?? NO_RING)),
+    boundingBox: async () => (options.box === undefined ? BOX : options.box),
   } as unknown as Locator;
 }
 
 function fakePage(options: { drawnSides: readonly Side[]; style: Style }) {
   const bands = outlineBands(BOX, options.style.outlineWidth, options.style.outlineOffset);
-  let focused = false;
+  const state: FocusState = { focused: false };
   const page = {
     evaluate: async () => {
-      focused = false;
+      state.focused = false;
     },
+    // フォーカスの要素の控え(検査の後に同じ要素へ戻す)。戻すと、フォーカスの状態が再び「フォーカス中」になる
+    evaluateHandle: async () => ({
+      evaluate: async () => {
+        state.focused = true;
+      },
+      dispose: async () => {},
+    }),
     screenshot: async (opts: { clip: Band }) => {
       const side = (Object.keys(bands) as Side[]).find((s) => bands[s].x === opts.clip.x && bands[s].y === opts.clip.y);
       if (side === undefined) {
         throw new Error("想定外の clip");
       }
-      const drawn = focused && options.drawnSides.includes(side);
+      const drawn = state.focused && options.drawnSides.includes(side);
       return drawn ? new Uint8Array([9, 9, 9]).buffer : new Uint8Array([1, 2, 3]).buffer;
     },
   };
   const focus = async () => {
-    focused = true;
+    state.focused = true;
   };
-  return { page: page as unknown as Page, focus };
+  return { page: page as unknown as Page, focus, state };
 }
 
 describe("expectFocusRingDrawn(偽物の Locator と Page による検証)", () => {
   const style: Style = { outlineStyle: "solid", outlineWidth: 2, outlineOffset: 0 };
 
   it("4 辺すべてが描かれていれば成功する", async () => {
-    const { page, focus } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
-    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(style, BOX) })).resolves.toBeUndefined();
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: style }) })).resolves.toBeUndefined();
+  });
+
+  it("検査の後、フォーカスは検査した要素へ戻っている(呼び出し側の続きの操作がフォーカスを前提にできる)", async () => {
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    await expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: style }) });
+    expect(state.focused).toBe(true);
+  });
+
+  it("フォーカス前は枠が無く、フォーカスして初めて枠が出る要素でも成功する(枠の算出は focus の後に読む)", async () => {
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    const ring = fakeRing(state, { focused: style, blurred: NO_RING });
+    await expect(expectFocusRingDrawn(page, { focus, ring })).resolves.toBeUndefined();
   });
 
   it("1 辺でも描かれなければ、その辺の名前を含む例外を投げる", async () => {
-    const { page, focus } = fakePage({ drawnSides: ["top", "right", "bottom"], style });
-    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(style, BOX) })).rejects.toThrow(/left/);
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom"], style });
+    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: style }) })).rejects.toThrow(/left/);
   });
 
-  it("outline-style が none なら例外にする", async () => {
+  it("フォーカスした後も outline-style が none なら例外にする", async () => {
     const none: Style = { ...style, outlineStyle: "none" };
-    const { page, focus } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
-    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(none, BOX) })).rejects.toThrow(/outline-style: none/);
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: none }) })).rejects.toThrow(/outline-style: none/);
   });
 
   it("outline の幅が 0 なら例外にする", async () => {
     const zero: Style = { ...style, outlineWidth: 0 };
-    const { page, focus } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
-    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(zero, BOX) })).rejects.toThrow(/フォーカス枠が指定/);
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: zero }) })).rejects.toThrow(/フォーカス枠が指定/);
   });
 
   it("boundingBox が null なら例外にする", async () => {
-    const { page, focus } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
-    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(style, null) })).rejects.toThrow(/位置を取得/);
+    const { page, focus, state } = fakePage({ drawnSides: ["top", "right", "bottom", "left"], style });
+    await expect(expectFocusRingDrawn(page, { focus, ring: fakeRing(state, { focused: style, box: null }) })).rejects.toThrow(/位置を取得/);
   });
 });
