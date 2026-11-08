@@ -90,6 +90,144 @@ describe("編集と未保存表示", () => {
   });
 });
 
+describe("未保存表示: 基準のソースとの比較(要件 2.2)", () => {
+  // 未保存は「編集領域の内容が最後に開いた/保存した内容と異なる間」だけ示す。取り消しで基準と同じ内容に戻れば解除する
+
+  it("編集中は未保存、基準のソースと同じ内容に戻すと未保存が解除される", () => {
+    const ws = createWorkspace();
+    const original = ws.getSnapshot().source;
+    ws.setSource(`${original}+`);
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource(original);
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("保存後に編集して元の保存内容へ戻すと未保存が解除される", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.markSaved(ws.getSnapshot().source, "a.bf");
+    ws.setSource("+.");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("+");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "a.bf", dirty: false, lossyNotice: false });
+  });
+
+  it("保存で基準は保存時点のソースになり、その後の差分だけが未保存になる", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.markSaved("+", "a.bf");
+    ws.setSource("++");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("+");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("保存の応答前の編集(保存中の編集)は、基準との差分として未保存のまま残る", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    const sent = ws.getSnapshot().source;
+    ws.setSource("+.");
+    ws.markSaved(sent, "a.bf");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    // 保存中の編集を元へ戻すと、保存時点と一致するので解除される
+    ws.setSource("+");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("名前を付けて保存でも基準は保存時点のソースになる", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.markSaved("+", "b.bf");
+    ws.setSource("+");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+    ws.setSource("-");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+  });
+
+  it("開く(replaceDocument)で基準は置換後のソースになり、編集して元に戻すと未保存が解除される", () => {
+    const ws = createWorkspace();
+    ws.setSource("edited");
+    ws.replaceDocument({ source: "opened", fileName: "a.bf", lossy: false });
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+    ws.setSource("opened!");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("opened");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("新規(newDocument)で基準は空のソースになり、編集して空に戻すと未保存が解除される", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.newDocument();
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+    ws.setSource("+");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("起動時のサンプルに編集して元に戻すと、無題のまま未保存は解除される", () => {
+    const ws = createWorkspace();
+    const sample = ws.getSnapshot().source;
+    ws.setSource(`${sample}.`);
+    expect(ws.getSnapshot().document).toEqual({ fileName: null, dirty: true, lossyNotice: false });
+    ws.setSource(sample);
+    expect(ws.getSnapshot().document).toEqual({ fileName: null, dirty: false, lossyNotice: false });
+  });
+
+  it("Shift_JIS などを開いたときの置換文字を含むソースが基準になる(lossyNotice は変えない)", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: "a�", fileName: "sjis.bf", lossy: true });
+    expect(ws.getSnapshot().document).toEqual({ fileName: "sjis.bf", dirty: false, lossyNotice: true });
+    ws.setSource("a");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("a�");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+  it("CRLF を含む開いた文書も LF に正規化した基準と比べ、元に戻すと未保存が解除される(k2)", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: "a\r\nb", fileName: "x.bf", lossy: false });
+    expect(ws.getSnapshot().baselineSource).toBe("a\nb");
+    ws.setSource("a\nb!");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("a\nb");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("保存時点のソースが CRLF でも基準は LF に正規化され、同じ内容なら未保存は解除される(k1)", () => {
+    const ws = createWorkspace();
+    ws.setSource("a\nb");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.markSaved("a\r\nb", "x.bf");
+    expect(ws.getSnapshot().baselineSource).toBe("a\nb");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "x.bf", dirty: false, lossyNotice: false });
+  });
+
+  it("基準が LF で編集内容が CRLF でも、正規化後に基準と一致すれば未保存は解除される(k4)", () => {
+    const ws = createWorkspace();
+    ws.replaceDocument({ source: "a\nb", fileName: "x.bf", lossy: false });
+    ws.setSource("a\nb!");
+    expect(ws.getSnapshot().document.dirty).toBe(true);
+    ws.setSource("a\r\nb");
+    expect(ws.getSnapshot().source).toBe("a\nb");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+
+  it("基準だけが変わる保存(dirty と紐づけ先は同じ)でも基準が更新され、後の比較に反映される(l)", () => {
+    const ws = createWorkspace();
+    ws.setSource("+");
+    ws.setSource("++");
+    ws.markSaved("+", "a.bf");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "a.bf", dirty: true, lossyNotice: false });
+    // dirty(true)と fileName("a.bf")は変わらず、基準だけ "+!" に変わる
+    ws.markSaved("+!", "a.bf");
+    expect(ws.getSnapshot().document).toEqual({ fileName: "a.bf", dirty: true, lossyNotice: false });
+    expect(ws.getSnapshot().baselineSource).toBe("+!");
+    ws.setSource("+!");
+    expect(ws.getSnapshot().document.dirty).toBe(false);
+  });
+});
+
 describe("文書の置換(新規・開く)", () => {
   it("置換でソース・ファイル名・置換通知が更新され、未保存は解除される", () => {
     const ws = createWorkspace();

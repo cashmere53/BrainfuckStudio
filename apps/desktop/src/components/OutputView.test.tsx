@@ -94,7 +94,7 @@ describe("OutputView(要件 9.1・9.2・9.7〜9.9)", () => {
     switchTo("16 進");
     // 16 進の行頭は出力全体における絶対位置(省略分を含む)
     expect(screen.getAllByRole("listitem")[0]?.textContent).toContain("0000000A");
-  });
+  }, 30_000); // 65,536 バイトの描画と 16 進への切り替えは単独でも約 3.5 秒かかり、並列実行の負荷で既定の 5 秒を超えることがあるため
 
   it("省略がない出力では省略メッセージを表示しない(要件 9.8)", () => {
     renderView(bufferOf([0x41]), "text");

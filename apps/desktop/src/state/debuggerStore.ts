@@ -291,6 +291,9 @@ function applyStep(s: DebuggerState, result: StepResultDto): DebuggerState {
   };
   switch (result.outcome.kind) {
     case "executed":
+      // Rust の step_into は最後の命令でも outcome: executed を返し、同時に lastStop = halted を記録する。
+      // その場合は正常終了の停止状態へ遷移する(待機のままだと Run・Step が有効のまま残る。要件 4.7・4.8)
+      if (result.state.lastStop === "halted") return { ...base, phase: "halted" };
       return base;
     case "halted":
       return { ...base, phase: "halted" };
