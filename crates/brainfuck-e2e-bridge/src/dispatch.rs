@@ -34,7 +34,8 @@ pub trait DialogPort {
 }
 
 /// ブリッジが対応するコマンド名(制御コマンド `e2e:*` を除く)。基準は `names.rs` の `COMMAND_NAMES`。
-/// 3.3 の契約テストが集合で比べる。
+/// 3.3 の契約テストが集合で比べる。実行時の分岐には使わない(`dispatch` の `match` が正)ため、本体では未使用になる。
+#[allow(dead_code)]
 pub const COMMANDS: &[&str] = &[
     "load_source",
     "start_session",

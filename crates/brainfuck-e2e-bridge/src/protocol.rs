@@ -195,6 +195,33 @@ mod tests {
         assert_eq!(line, "{\"type\":\"dialog\",\"id\":6,\"kind\":\"save\"}\n");
     }
 
+    /// 書き込まれた長さと、flush が呼ばれた時点で書かれていた長さを記録する出力。
+    #[derive(Default)]
+    struct FlushRecorder {
+        written: Vec<u8>,
+        flushed_at: Vec<usize>,
+    }
+
+    impl Write for FlushRecorder {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed_at.push(self.written.len());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_line_flushes_after_the_whole_line_is_written() {
+        let mut out = FlushRecorder::default();
+        write_line(&mut out, &Outbound::ok(8, Value::Null)).expect("write_line");
+        assert_eq!(out.flushed_at, vec![out.written.len()]);
+        assert!(out.written.ends_with(b"\n"));
+    }
+
     #[test]
     fn write_line_emits_exactly_one_line() {
         let line = encode(&Outbound::ok(7, json!({"text": "a\nb"})));
