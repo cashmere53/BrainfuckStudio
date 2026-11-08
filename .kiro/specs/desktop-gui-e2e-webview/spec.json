@@ -1,0 +1,22 @@
+{
+  "feature_name": "desktop-gui-e2e-webview",
+  "created_at": "2026-11-08T07:18:58Z",
+  "updated_at": "2026-11-08T08:30:00Z",
+  "language": "ja",
+  "phase": "tasks-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": true
+    },
+    "design": {
+      "generated": true,
+      "approved": true
+    },
+    "tasks": {
+      "generated": true,
+      "approved": true
+    }
+  },
+  "ready_for_implementation": true
+}

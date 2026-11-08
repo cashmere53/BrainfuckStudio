@@ -17,6 +17,7 @@
 - `brainfuck-gui-api`: Tauri 非依存の DTO と `DebuggerService`(GUI 用 API)
 - `brainfuck-wasm` / `brainfuck-compare`: WASM バックエンドと方式比較(compiler-comparison)
 - `brainfuck-compare-api`: 比較用の DTO と `ComparisonService`(compiler-comparison)。`brainfuck-compare` と `brainfuck-gui-api` に一方向で依存し、`brainfuck-gui-api` を WASM 系の重い依存から隔離する
+- `brainfuck-e2e-bridge`: desktop-gui の E2E(desktop-gui-e2e-browser)専用の stdio ブリッジ(テスト用ツール。`publish = false`、配布しない)。`brainfuck-gui-api` に一方向で依存し、外部依存は `serde`・`serde_json`(dev: `tempfile`)のみ。どの crate も本 crate に依存しない
 - 依存方向: core ← optimized ← wasm ← compare ← compare-api ← `apps/desktop/src-tauri`、core ← gui-api ← compare-api(`src-tauri` は gui-api と compare-api の双方に依存。gui-api は compare/wasm/optimized に依存しない)
 
 ### Desktop app
