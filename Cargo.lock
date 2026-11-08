@@ -26,6 +26,16 @@ name = "brainfuck-core"
 version = "0.1.0"
 
 [[package]]
+name = "brainfuck-e2e-bridge"
+version = "0.1.0"
+dependencies = [
+ "brainfuck-gui-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "brainfuck-gui-api"
 version = "0.1.0"
 dependencies = [
