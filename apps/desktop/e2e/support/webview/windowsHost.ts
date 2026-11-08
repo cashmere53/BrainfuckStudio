@@ -11,7 +11,10 @@ export type HostResult =
   | { action: "window"; found: true; title: string }
   | { action: "close"; delivered: true; reason: null }
   | { action: "keys"; delivered: true; reason: null }
-  | { action: "menu"; menuOpen: boolean };
+  | { action: "menu"; menuOpen: boolean; menu?: HostMenuDiagnostic | null };
+
+/** 開いていた既定のコンテキストメニューの診断(検出したポップアップのクラスと、メニューの項目の名前) */
+export type HostMenuDiagnostic = { windowClass: string; items: string[] };
 
 /** 届けられなかった(ウィンドウが無い・前面化できない)結果や形の違う出力。理由を含む */
 export class HostActionError extends Error {
@@ -47,6 +50,20 @@ function nonEmptyLines(text: string): string[] {
 
 function malformed(action: HostAction, detail: string): HostActionError {
   return new HostActionError(action, `補助スクリプトの出力の形が違います(${detail})`);
+}
+
+/** menu の診断。無い(undefined)・検出なし(null)・形の違う値(エラー)を区別する */
+function parseMenuDiagnostic(action: HostAction, value: unknown): HostMenuDiagnostic | null | undefined {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isRecord(value) || typeof value.windowClass !== "string" || !Array.isArray(value.items)) {
+    throw malformed(action, "menu の形が違います");
+  }
+  if (!value.items.every((item): item is string => typeof item === "string")) {
+    throw malformed(action, "menu の items の型が違います");
+  }
+  return { windowClass: value.windowClass, items: value.items };
 }
 
 /**
@@ -108,10 +125,13 @@ export function parseHostResult(action: HostAction, stdout: string): HostResult 
       throw malformed(action, "delivered の型が違います");
     }
     case "menu": {
-      if (typeof value.menuOpen === "boolean") {
-        return { action, menuOpen: value.menuOpen };
+      if (typeof value.menuOpen !== "boolean") {
+        throw malformed(action, "menuOpen の型が違います");
       }
-      throw malformed(action, "menuOpen の型が違います");
+      const menu = parseMenuDiagnostic(action, value.menu);
+      return menu === undefined
+        ? { action, menuOpen: value.menuOpen }
+        : { action, menuOpen: value.menuOpen, menu };
     }
   }
 }

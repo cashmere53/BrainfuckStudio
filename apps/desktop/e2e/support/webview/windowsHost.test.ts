@@ -121,6 +121,56 @@ describe("parseHostResult(補助スクリプトの 1 行の JSON の解析)", ()
     expect(parseHostResult("menu", '{"action":"menu","menuOpen":true}')).toEqual({ action: "menu", menuOpen: true });
   });
 
+  it("menu: 検出したメニューの診断(ポップアップのクラスと項目の名前)を返す", () => {
+    expect(
+      parseHostResult(
+        "menu",
+        '{"action":"menu","menuOpen":true,"menu":{"windowClass":"Chrome_WidgetWin_1","items":["戻る","最新の情報に更新","名前を付けて保存"]}}',
+      ),
+    ).toEqual({
+      action: "menu",
+      menuOpen: true,
+      menu: { windowClass: "Chrome_WidgetWin_1", items: ["戻る", "最新の情報に更新", "名前を付けて保存"] },
+    });
+  });
+
+  it("menu: 項目が無いメニューは items が空の配列として返す", () => {
+    expect(parseHostResult("menu", '{"action":"menu","menuOpen":true,"menu":{"windowClass":"Chrome_WidgetWin_1","items":[]}}')).toEqual({
+      action: "menu",
+      menuOpen: true,
+      menu: { windowClass: "Chrome_WidgetWin_1", items: [] },
+    });
+  });
+
+  it("menu: 検出なし(menu が null)は menu: null として返す", () => {
+    expect(parseHostResult("menu", '{"action":"menu","menuOpen":false,"menu":null}')).toEqual({
+      action: "menu",
+      menuOpen: false,
+      menu: null,
+    });
+  });
+
+  it("menu: items の型が違えば HostActionError にする(文字列・数値の混在)", () => {
+    expectHostError(
+      () => parseHostResult("menu", '{"action":"menu","menuOpen":true,"menu":{"windowClass":"Chrome_WidgetWin_1","items":"戻る"}}'),
+      "menu",
+      "形",
+    );
+    expectHostError(
+      () => parseHostResult("menu", '{"action":"menu","menuOpen":true,"menu":{"windowClass":"Chrome_WidgetWin_1","items":["戻る",1]}}'),
+      "menu",
+      "items",
+    );
+  });
+
+  it("menu: windowClass が文字列でなければ HostActionError にする", () => {
+    expectHostError(
+      () => parseHostResult("menu", '{"action":"menu","menuOpen":true,"menu":{"windowClass":1,"items":[]}}'),
+      "menu",
+      "形",
+    );
+  });
+
   it("error の行は、その理由を含む HostActionError にする", () => {
     expectHostError(
       () => parseHostResult("runtime", '{"error":"レジストリの読み取りに失敗"}'),

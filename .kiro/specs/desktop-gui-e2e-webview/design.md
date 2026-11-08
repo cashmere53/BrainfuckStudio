@@ -359,7 +359,7 @@ export function bindWindowsHost(pid: number): BoundWindowsHost;
 | `window` | プロセスの主ウィンドウ(表示中で所有者の無いトップレベル)のハンドルとタイトル |
 | `close` | 主ウィンドウへ `PostMessage(WM_SYSCOMMAND, SC_CLOSE, 0)`(× ボタンと同じ経路)。ウィンドウが無ければ `delivered: false` と理由 |
 | `keys` | `WScript.Shell.AppActivate(pid)` で前面化し、成功したら `System.Windows.Forms.SendKeys.SendWait(keys)`。前面化できなければ `delivered: false` と理由 |
-| `menu` | 対象プロセスと子孫のプロセス ID(`Win32_Process` の親子)を集め、UI Automation のルートの子のうち `ControlType.Menu` で、その ID に属する要素があるか |
+| `menu` | 対象プロセスと子孫のプロセス ID(`Win32_Process` の親子)を集める。`EnumWindows` で列挙した可視の最上位ウィンドウのうち、主ウィンドウ以外で、所有プロセスが対象のプロセスツリー内、クラスが `Chrome_WidgetWin_*` のものの UI Automation の部分木(`FromHandle` の `FindFirst(Subtree)`)に `ControlType.Menu` があるか。UIA のルート直下には既定のメニューが現れないため、この方法を使う。結果は `menuOpen` と、検出時の診断 `menu`(ポップアップのクラスと項目の名前。無ければ `null`) |
 
 - 起動は `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> ...`(`execFile`)。補助スクリプトのパスは固定で、利用者の入力を引数に渡さない
 - Node 側は `delivered: false` を `HostActionError` に変え、理由をテストの失敗に含める(偽の合格にしない)
@@ -526,9 +526,9 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 `smoke-11-defaults` の決め事:
 - 11.6(6.1): 編集で未保存にし、`placeNavigationMarker` と上流の `installDefaultActionProbe` を設定し、`host.sendKeys` で F5 を 10 回・`^r`・`^{F5}` を送る。プローブにそれぞれの `keydown` が `defaultPrevented: true` で記録されるのを待ってから、目印が残り遷移が 0 回で、編集内容が残ることを確かめる
 - 陽性対照(6.2): 別のテストで `bypassAppSuppression(["keydown"])` の後に `^r` を送り、目印が消える(遷移が 1 回以上)ことを `expect.poll` で確かめる
-- 11.7(6.3): 編集可能でない要素(「状態」領域)を CDP のマウスで右クリックし、プローブに `contextmenu` が `defaultPrevented: true` で記録されるのを待ってから、`host.contextMenuOpen()` が偽であることを 1 回確かめる
-- 陽性対照(6.4): 別のテストで `bypassAppSuppression(["contextmenu"])` の後に同じ右クリックをし、`expect.poll(host.contextMenuOpen)` が真になることを確かめる(後始末で Esc を送ってメニューを閉じる)
-- 11.7 の否定の判定と陽性対照は同じ手順(右クリック → 1 回の OS の確認)を使う。陽性対照が失敗した場合、11.7 の結果は信頼できないものとして扱う(6.4)
+- 11.7(6.3): 編集可能でない要素(「状態」領域)を CDP のマウスで右クリックし、プローブに `contextmenu` が `defaultPrevented: true` で記録されるのを待ってから、`host.contextMenuOpen()` が偽であることを複数回(3 回)確かめる。メニューの表示は検出時間(陽性対照で約 1.2 秒)より後に起きうるため、1 回の確認では競合で偽の合格になりうる
+- 陽性対照(6.4): 別のテストで `bypassAppSuppression(["contextmenu"])` の後に同じ右クリックをし、`expect.poll(host.contextMenuOpen)` が真になることを確かめる。後始末の Esc は `finally` で送り、検出に失敗してもメニューを閉じる
+- 11.7 の否定の判定と陽性対照は同じ右クリックの手順を使い、否定の判定は複数回の確認で行う。陽性対照が失敗した場合、11.7 の結果は信頼できないものとして扱う(6.4)
 
 `csp` の決め事(`startExternalSink` と `installCspViolationCollector` を使う):
 - インライン(7.1): `<script>` 要素に目印を立てる本文を入れて挿入 → 目印が立たない、`script-src-elem`(または `script-src`)の違反がある

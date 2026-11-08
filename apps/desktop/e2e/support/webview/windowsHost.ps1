@@ -4,7 +4,8 @@
 #   window  : プロセスの主ウィンドウ(表示中で所有者の無いトップレベル)のタイトル
 #   close   : 主ウィンドウへ WM_SYSCOMMAND/SC_CLOSE を送る(× ボタンと同じ OS の経路)
 #   keys    : 前面化(AppActivate → 復元と入力の接続による前面化)し、前面になったら SendKeys を送る。前面にならなければ何も送らない
-#   menu    : 対象プロセスと子孫に属する既定のコンテキストメニュー(UI Automation の Menu)の有無
+#   menu    : 対象プロセスと子孫に属する既定のコンテキストメニューの有無。メニューは主ウィンドウの UIA の子に現れないため、
+#             Win32 で列挙したプロセスツリー内の Chrome_WidgetWin_* の可視の最上位ウィンドウ(主ウィンドウ以外)の UIA 部分木の Menu を見る
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('runtime', 'window', 'close', 'keys', 'menu')]
@@ -54,6 +55,9 @@ public static class BfHostWin32
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
@@ -101,6 +105,35 @@ public static class BfHostWin32
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+
+    // 可視の最上位ウィンドウの一覧(列挙の順)
+    public static System.Collections.Generic.List<IntPtr> VisibleTopLevelWindows()
+    {
+        System.Collections.Generic.List<IntPtr> list = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows(delegate (IntPtr h, IntPtr l)
+        {
+            if (IsWindowVisible(h))
+            {
+                list.Add(h);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    public static string ClassNameOf(IntPtr h)
+    {
+        StringBuilder sb = new StringBuilder(256);
+        GetClassName(h, sb, sb.Capacity);
+        return sb.ToString();
+    }
+
+    public static uint ProcessIdOf(IntPtr h)
+    {
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        return pid;
     }
 
     public static string GetTitle(IntPtr h)
@@ -316,26 +349,48 @@ function Invoke-Keys {
     Write-KeysResult $true $null
 }
 
+# 既定のコンテキストメニューの検出。WebView2 のメニューは UI Automation のルート直下に現れないため、
+# 開いている間に現れる Chrome_WidgetWin_* の可視の最上位ウィンドウ(主ウィンドウ以外・プロセスツリー内)の部分木を見る
 function Invoke-Menu {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
+    $mainHandle = Get-MainWindowHandle
     $treeIds = Get-ProcessTreeIds $ProcessId
     $menuCondition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Menu
     )
-    $menus = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
-        [System.Windows.Automation.TreeScope]::Children,
-        $menuCondition
+    $itemCondition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::MenuItem
     )
-    $menuOpen = $false
-    foreach ($menu in $menus) {
-        if ($treeIds.Contains([int]$menu.Current.ProcessId)) {
-            $menuOpen = $true
+    $found = $null
+    foreach ($popup in [BfHostWin32]::VisibleTopLevelWindows()) {
+        if ($popup.ToInt64() -eq $mainHandle.ToInt64()) {
+            continue
+        }
+        if (-not $treeIds.Contains([int][BfHostWin32]::ProcessIdOf($popup))) {
+            continue
+        }
+        $className = [BfHostWin32]::ClassNameOf($popup)
+        if (-not $className.StartsWith('Chrome_WidgetWin_', [System.StringComparison]::Ordinal)) {
+            continue
+        }
+        $menu = $null
+        try {
+            $element = [System.Windows.Automation.AutomationElement]::FromHandle($popup)
+            $menu = $element.FindFirst([System.Windows.Automation.TreeScope]::Subtree, $menuCondition)
+        } catch {
+            # 列挙の後に閉じたウィンドウは、部分木を読めないので候補から外す
+            continue
+        }
+        if ($null -ne $menu) {
+            $items = @($menu.FindAll([System.Windows.Automation.TreeScope]::Children, $itemCondition) | ForEach-Object { [string]$_.Current.Name })
+            $found = @{ windowClass = $className; items = $items }
             break
         }
     }
-    Write-Line (ConvertTo-Json -Compress @{ action = 'menu'; menuOpen = $menuOpen })
+    Write-Line (ConvertTo-Json -Compress -Depth 4 @{ action = 'menu'; menuOpen = ($null -ne $found); menu = $found })
 }
 
 try {
