@@ -138,9 +138,9 @@ mise exec node@26 -- npm run e2e:run              # 準備を省いて実行(Pla
 
 - 複数のブラウザやブリッジが同時に動くマシンでは、`page.goto` が `ERR_ABORTED` や 30 秒のタイムアウトになることがあります。単独で実行すると通るため、そのときは `mise exec node@26 -- npm run e2e:run -- --project=chromium --workers=1` で 1 つずつ実行してください(準備は済んでいること)。
 - 起動直後の `page.goto` の遅れ(`npm run build` の直後に 4 ワーカーが同時に読み込むと、最初のテストが 30 秒のタイムアウトになることがある)には、`playwright.config.ts` の `retries: 1` で対処しています。ウォームアップの取得や `globalSetup` は足していません(再試行で通ったものは flaky として報告されるため、遅れが常態化していないかは報告で確認できます)。アサーションの失敗は再試行で隠さず、続けて失敗すれば失敗として報告されます。
-- 製品の不具合を見つけたシナリオは製品を直さず、`test.fixme` にして注釈(`type: "issue"`)に現象と追跡先を書いています。現在の 2 件は次のとおりです。
-  1. スモーク 2.1(要件 4.2、`smoke-02-editing.spec.ts`): 取り消しで保存時点と同じ内容に戻っても、未保存の表示が消えない(上流 desktop-gui 2.2。`apps/desktop/src/state/workspace.ts` の `setSource`)。
-  2. スモーク 5.3(`smoke-05-step.spec.ts`): 最後の命令を Step した直後、状態ラベルは「正常終了」になるが、Step と Run が有効のまま(上流 4.7・4.8。`apps/desktop/src/state/debuggerStore.ts` の `applyStep`)。
+- 製品の不具合を見つけたシナリオは、当初は製品を直さず `test.fixme` にして注釈(`type: "issue"`)に現象と追跡先を書いていました。次の 2 件は desktop-gui の PR #12 で修正済みで、`test.fixme` を外して通常のテストにしました。
+  1. スモーク 2.1(要件 4.2、`smoke-02-editing.spec.ts`): 取り消しで保存時点と同じ内容に戻ったら、未保存の表示も消える(上流 desktop-gui 2.2。修正前は `apps/desktop/src/state/workspace.ts` の `setSource` が dirty を無条件に立てていた)。
+  2. スモーク 5.3(`smoke-05-step.spec.ts`): 最後の命令を Step した後、Step と Run が無効になる(上流 4.7・4.8。修正前は `apps/desktop/src/state/debuggerStore.ts` の `applyStep` が停止を反映していなかった)。
 - 追跡先は `.kiro/specs/desktop-gui-e2e-browser/traceability.md` の「見つけた製品の不具合」です。
 
 ### 型検査の分担
@@ -386,7 +386,7 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 
 ### E2E(ブラウザ)の検証結果
 
-2026-11-08 に、`desktop-gui-e2e-browser` の最終検証を実施しました。
+2026-11-08 に、`desktop-gui-e2e-browser` の最終検証を実施しました。E2E(ブラウザ)の行は、`fixme` を外した後の 2026-11-09 の再実施の結果です。
 
 | 項目 | 結果 |
 | --- | --- |
@@ -397,15 +397,12 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 | `npm run lint` | 成功 |
 | `npm test`(vitest) | 成功。57 ファイル・1,011 件が成功(E2E の補助の単体テストを含む) |
 | `npm run build` | 成功。`dist/` に IPC シム(`__bfE2e`)は含まれない |
-| `npx playwright test --project=chromium`(`npm run e2e:run`) | 成功。4 ワーカーの並列で、88 件のうち 86 件が成功、2 件が `test.fixme`(下記)、失敗 0(1.2 分)。`--workers=1` で `--repeat-each=3` を直列に実行しても、258 件が成功、6 件(`fixme` の 2 件 × 3)がスキップ、失敗 0 |
+| `npx playwright test --project=chromium`(`npm run e2e:run`) | 成功。`--workers=1` で、88 件すべてが成功、flaky 0、スキップ 0(1.6 分)。`--workers=1` で `smoke-02-editing.spec.ts` と `smoke-05-step.spec.ts` を `--repeat-each=3` で実行すると、30 件すべてが成功(33.9 秒)。4 ワーカーの並列では、2 回目の実行で 88 件すべてが成功(84 件が初回で成功、4 件が再試行で成功 = flaky、失敗 0、2.0 分)。同じ 4 ワーカーの 1 回目の実行では、`page.goto` の `ERR_ABORTED` で 5 件が失敗したため(上の「並列度と製品の不具合の記録」を参照)、確認は `--workers=1` でも行った |
 | `npx playwright test --project=perf`(`npm run e2e:perf`) | 成功。3 件が成功。実測値(直列、`--repeat-each=3` の範囲): Pause のクリックから `pause` の完了まで 164〜174 ms、実行数の表示の更新間隔の最大 69〜75 ms、Pause 後の表示の追いつき 22〜24 ms(いずれも閾値 1,500 ms 以下) |
 | 製品のソースの差分 | なし(`apps/desktop/src`、`src-tauri`、`index.html`、`vite.config.ts`、`tsconfig.json`、既存の `crates/*` に変更なし。新設は `crates/brainfuck-e2e-bridge/`、設定、文書、ワークフローのみ) |
 | `cargo tree -i brainfuck-e2e-bridge` | 自身のみ(他の crate はブリッジに依存しない) |
 
-`test.fixme` の 2 件(製品の不具合として記録。追跡先は `.kiro/specs/desktop-gui-e2e-browser/traceability.md` の「見つけた製品の不具合」):
-
-1. スモーク 2.1(要件 4.2、`smoke-02-editing.spec.ts`): 取り消しで保存時点と同じ内容に戻っても、未保存の表示が消えない(上流 desktop-gui 2.2)。
-2. スモーク 5.3(`smoke-05-step.spec.ts`): 最後の命令を Step した直後、状態ラベルは「正常終了」になるが、Step と Run が有効のまま(上流 4.7・4.8)。
+製品の不具合の記録(追跡先は `.kiro/specs/desktop-gui-e2e-browser/traceability.md` の「見つけた製品の不具合」)。以前は `test.fixme` の 2 件(スモーク 2.1 の未保存の表示、スモーク 5.3 の終端のボタンの無効化)でしたが、desktop-gui の PR #12 で修正され、`test.fixme` を外して通常のテストにしました。現在 `test.fixme` は 0 件です。
 
 実施時の注意:
 

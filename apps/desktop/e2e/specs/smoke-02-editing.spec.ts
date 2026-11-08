@@ -49,31 +49,17 @@ test.describe("スモーク 2: 編集", () => {
     }
   });
 
-  // 製品の不具合の記録: 編集の取り消しで保存時点と同じ内容に戻っても、未保存の表示が残る
-  // (setSource は編集のたびに dirty を立て、解除は保存(markSaved)だけで行うため)。
-  // 上流 desktop-gui の要件 2.2 は「内容が最後に開いた/保存した内容と異なる間」だけ未保存を示すと定めている。
-  test.fixme(
-    "4.2 取り消しで保存時点と同じ内容に戻ったら、未保存の表示も消える",
-    {
-      annotation: {
-        type: "issue",
-        description:
-          "製品の不具合: Ctrl+Z で保存時点と同じ内容に戻っても documentStatus が「無題(未保存の変更あり)」のまま。" +
-          "原因の候補: apps/desktop/src/state/workspace.ts の setSource が dirty を無条件に true にする。" +
-          "上流の要件: .kiro/specs/desktop-gui/requirements.md の 2.2。e2e 側の要件: .kiro/specs/desktop-gui-e2e-browser/requirements.md の 4.2。" +
-          "追跡先: .kiro/specs/desktop-gui-e2e-browser/traceability.md の「見つけた製品の不具合」",
-      },
-    },
-    async ({ debuggerPage }) => {
-      const { page, documentStatus } = debuggerPage;
-      await debuggerPage.editor.click();
-      await page.keyboard.press("ControlOrMeta+End");
-      await page.keyboard.type("+");
-      await expect(documentStatus).toHaveText(DIRTY_STATUS);
-      await page.keyboard.press("ControlOrMeta+Z");
-      await expect(documentStatus).toHaveText("無題");
-    },
-  );
+  // 取り消しで保存時点と同じ内容に戻ったら未保存の表示も消える(desktop-gui の PR #12 で修正済み。
+  // 上流の要件 2.2: 内容が最後に開いた/保存した内容と異なる間だけ未保存を示す)。
+  test("4.2 取り消しで保存時点と同じ内容に戻ったら、未保存の表示も消える", async ({ debuggerPage }) => {
+    const { page, documentStatus } = debuggerPage;
+    await debuggerPage.editor.click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type("+");
+    await expect(documentStatus).toHaveText(DIRTY_STATUS);
+    await page.keyboard.press("ControlOrMeta+Z");
+    await expect(documentStatus).toHaveText("無題");
+  });
 
   test("4.3 カーソルが対応のある括弧に接すると、対応する括弧の両方が一致の強調になる", async ({ debuggerPage }) => {
     const { page } = debuggerPage;
