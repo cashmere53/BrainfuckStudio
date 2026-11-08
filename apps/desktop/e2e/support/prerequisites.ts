@@ -52,8 +52,8 @@ export function prerequisiteCommands(missing: readonly PrerequisiteKind[]): stri
   return commands;
 }
 
-/** 実行中の環境でのパス一覧 */
-export function defaultPrerequisitePaths(): PrerequisitePaths {
+/** 指定した env(既定は process.env)でのパス一覧。ブリッジのパスは同じ env で解決する */
+export function defaultPrerequisitePaths(env: NodeJS.ProcessEnv = process.env): PrerequisitePaths {
   let chromiumPath: string | undefined;
   try {
     chromiumPath = chromium.executablePath();
@@ -63,7 +63,7 @@ export function defaultPrerequisitePaths(): PrerequisitePaths {
   return {
     dist: DIST_INDEX_PATH,
     shim: SHIM_BUNDLE_PATH,
-    bridge: bridgeBinaryPath(process.env),
+    bridge: bridgeBinaryPath(env),
     chromium: chromiumPath,
   };
 }
@@ -74,7 +74,7 @@ export function defaultPrerequisitePaths(): PrerequisitePaths {
  */
 export function assertPrerequisites(
   env: NodeJS.ProcessEnv,
-  paths: PrerequisitePaths = defaultPrerequisitePaths(),
+  paths: PrerequisitePaths = defaultPrerequisitePaths(env),
   exists: (path: string) => boolean = existsSync,
 ): void {
   if (shouldSkipPrerequisites(env)) {

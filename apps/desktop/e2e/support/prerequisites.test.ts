@@ -1,8 +1,9 @@
 // @vitest-environment node
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertPrerequisites,
+  defaultPrerequisitePaths,
   missingPrerequisites,
   prerequisiteCommands,
   shouldSkipPrerequisites,
@@ -110,5 +111,48 @@ describe("assertPrerequisites(設定の読み込み時の確認)", () => {
     expect(message).toContain("npm run e2e:prepare");
     expect(message).not.toContain("npx playwright install chromium");
     expect(message).toContain("E2E_SKIP_PREREQ=1");
+  });
+});
+
+describe("defaultPrerequisitePaths(注入された env からのパス解決)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("注入した env の E2E_BRIDGE_BIN がブリッジのパスに反映される", () => {
+    const injected = path.join("/injected", "bridge", "brainfuck-e2e-bridge.exe");
+    expect(defaultPrerequisitePaths({ E2E_BRIDGE_BIN: injected }).bridge).toBe(path.resolve(injected));
+  });
+
+  it("process.env の値ではなく、引数の env が使われる", () => {
+    vi.stubEnv("E2E_BRIDGE_BIN", path.join("/from-process-env", "bridge.exe"));
+    const injected = path.join("/injected", "bridge.exe");
+    expect(defaultPrerequisitePaths({ E2E_BRIDGE_BIN: injected }).bridge).toBe(path.resolve(injected));
+  });
+});
+
+describe("assertPrerequisites(引数の env を既定のパス解決に使う)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("paths を省略したとき、注入した env の E2E_BRIDGE_BIN が指すパスで不足を判定する", () => {
+    vi.stubEnv("E2E_BRIDGE_BIN", path.join("/from-process-env", "bridge.exe"));
+    const injected = path.resolve(path.join("/injected", "bridge.exe"));
+    const seen: string[] = [];
+    const exists = (p: string): boolean => {
+      seen.push(p);
+      return p !== injected;
+    };
+    let message = "";
+    try {
+      assertPrerequisites({ E2E_BRIDGE_BIN: injected }, undefined, exists);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(seen).toContain(injected);
+    expect(seen).not.toContain(path.resolve(path.join("/from-process-env", "bridge.exe")));
+    expect(message).toContain("テスト専用ブリッジ");
+    expect(message).not.toContain("画面のビルド成果物");
   });
 });
