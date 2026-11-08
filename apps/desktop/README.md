@@ -476,6 +476,32 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 - この開発 PC では、新しくビルドされたブリッジの実行ファイルがウイルス対策ソフトに止められ、起動時に固まりました(新しい `CARGO_TARGET_DIR` で再ビルドした実行ファイルが `e2e:ping` に応答しなかった)。上の E2E は、すでに実行済みで起動できるブリッジ(同じソースからビルドしたもの)を `E2E_BRIDGE_BIN` で指定して実行しました。新しいビルドで E2E を回すには、ウイルス対策ソフトの除外設定が必要です。GitHub Actions(Linux)の job は未実行で、PR の CI で初めて確認されます。
 - 安定性: 複数のブラウザやブリッジが同時に動くマシン(例: 他の作業が走っている間)では、`page.goto` がタイムアウトすることがあります。単独の実行では通ります。
 
+### E2E(実アプリ・WebView2)の検証結果
+
+2026-11-09 に、`desktop-gui-e2e-webview` の最終検証を Windows の開発 PC で実施しました。WebView2 のランタイムは **158.0.4370.7**(結果の注釈にも記録)です。
+
+| 項目 | 結果 |
+| --- | --- |
+| `npm run typecheck`(製品と E2E) | 成功 |
+| `npm run lint` | 成功 |
+| `npm test`(vitest) | 成功。67 ファイル・1,192 件が成功(webview の補助の単体テストを含む) |
+| `cargo test`(`apps/desktop/src-tauri`) | 成功。27 件(`commands` 9、`files` 13、`window` 5)、失敗 0 |
+| `npm run e2e:webview:prepare`(`tauri build --debug --no-bundle`) | 成功。実行ファイルは `<CARGO_TARGET_DIR>/debug/brainfuck-studio.exe`。画面(`dist/`)を組み込んだモードで、`devUrl` は使わない |
+| `npm run e2e:webview:run`(`E2E_APP_BIN` に上の実行ファイルを指定) | 成功。**20 件が成功**(準備の確認 1、起動 3、Hello World 1、Pause と再開 1、閉じる確認 4、リロードと右クリックの抑止 4(本体 2 と陽性対照 2)、フォーカス枠 2、CSP 4)、失敗 0、スキップ 0(1.1 分)。実行後に実アプリのプロセスと一時フォルダは残らない |
+| 上流の `npx playwright test --list`(`E2E_SKIP_PREREQ=1`) | 91 件・16 ファイルで変わらず(webview のプロジェクトは含まれない) |
+| `npm test` の対象 | `e2e/webview/` のシナリオは含まれない(`e2e/support/**/*.test.ts` だけ) |
+| 製品のソースの差分 | なし(`apps/desktop/src`、`src-tauri`、`crates/*/src`、`index.html`、`vite.config.ts`、`tsconfig.json` に変更なし。`tauri build` が書き換える `src-tauri/Cargo.toml` は、実行の後に `git checkout` で戻した) |
+
+通常の起動とテストの起動のブラウザプロセスの引数の比較(実測): テストの起動では、アプリの既定の引数(`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` など)が残ったまま `--remote-debugging-port=<port>` が追加され、`--user-data-dir` はシナリオごとの一時フォルダ(`scenario-<uuid>/EBWebView`)を指します。差は `--remote-debugging-port` と `--user-data-dir` の値だけです(起動のたびに変わる mojo の pipe 名は除く)。`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` はアプリの指定に追加されるため、アプリの既定の引数は消えません。
+
+実装で分かった事実:
+
+- **IPC の観測は postMessage 方式です。** 製品の CSP(`connect-src` 未指定)が Tauri の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否するため、Tauri は `window.chrome.webview.postMessage` に自動で切り替わり、応答は `__TAURI_INTERNALS__.runCallback` で返ります。ネットワーク要求の観測も `invoke` の包み込みも実アプリでは成立しませんでした(`research.md` に根拠)。実アプリは毎回起動時に、`fetch` の IPC が拒否されたことを示す `console.warn` を出しますが、機能には影響しません(CSP に `connect-src 'self' ipc: http://ipc.localhost` を足すと Tauri が想定する `fetch` 方式になりますが、製品の変更でこの feature の範囲外です)。
+- **既定のコンテキストメニューの検出**: 最初の実装は UI Automation のルート直下の `Menu` を探しており、メニューが出ていても常に偽でした(11.7 の否定が何があっても合格する状態)。陽性対照が見つけ、`Chrome_WidgetWin_*` の最上位ウィンドウを列挙して UIA の部分木から `Menu` を探す形に直しました。
+- **前面化**: Windows の前面化ロックで `AppActivate` だけでは実アプリが前面にならず、OS のキー入力が失敗しました。復元と `AttachThreadInput` による `SetForegroundWindow` を足しました(入力を送らずに前面化を試し、前面にならなければ何も送らずに失敗する。送信の直前直後に前面を再確認する)。
+- 新しくビルドした実行ファイルは、この開発 PC で Avast に止められずに起動できました(以前は、新しくビルドした別の実行ファイルが固まったことがあります)。固まる場合は「トラブルシューティング」を参照してください。
+- GitHub Actions の `e2e-webview` の job は、まだ実行していません。最初のプルリクエストで確認し、結果で必須への昇格を判断します。
+
 ## トラブルシューティング
 
 - **ビルドスクリプトやテストの実行ファイルが起動時に固まる**: 新しく作られた実行ファイルの起動を、ウイルス対策ソフトが止めている場合があります。プロセスが CPU を使わず進まない場合は、リポジトリのフォルダー、`CARGO_TARGET_DIR` に指定したフォルダー、`.cargo` を、ウイルス対策ソフトの除外に追加してから、やり直してください。固まったプロセスは終了できないことがあり、その場合は再起動で消えます。同じビルドディレクトリで繰り返すと、実行ファイルのロックでリンクに失敗することがあるため、新しい `CARGO_TARGET_DIR` を指定すると回避できます。

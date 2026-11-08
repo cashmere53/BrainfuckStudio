@@ -14,7 +14,7 @@
 > - webview の単体テスト(`e2e/support/webview/*.test.ts`)は、上流と同じく各ファイルの先頭に `// @vitest-environment node` を置く(Vitest の既定は jsdom と `src/test/setup.ts`。`appProcess`・`cspProbe`(`node:http`)・`windowsHost` などは Node の API を使う)
 > - E2E で製品の不具合が見つかった場合は製品を直さず、該当テストを `test.fixme` にして注釈に現象と追跡先を書き、最終検証(5.1、5.2)で README と traceability に記録する
 
-- [ ] 1. 基盤: 実行の入口、OS の窓口、準備の確認、実アプリの起動
+- [x] 1. 基盤: 実行の入口、OS の窓口、準備の確認、実アプリの起動
 
 - [x] 1.1 パスの解決と準備物の判定を実装する
   - 実アプリの実行ファイル(明示の指定、`CARGO_TARGET_DIR`、アプリの既定のビルドディレクトリの順)、補助スクリプト、一時的な利用者データのフォルダの根のパスと、配信オリジン・IPC の URL の接頭辞の定数を用意し、優先順位の単体テストを書く
@@ -61,7 +61,7 @@
   - _Depends: 1.4_(単体テストは 1.1 だけに依存するが、実アプリでの確認に 1.4 のビルドが要る)
   - _Requirements: 1.6, 1.7, 1.8, 1.9, 2.3, 2.5_
 
-- [ ] 2. 観測の補助とフィクスチャ
+- [x] 2. 観測の補助とフィクスチャ
 
 - [x] 2.1 (P) 実アプリのページの観測の補助を実装する
   - IPC の観測を postMessage の方式で提供する(製品の CSP が Tauri の `fetch` 方式の IPC を拒否し、IPC が `window.chrome.webview.postMessage` で流れるため。ネットワーク要求の購読と `__TAURI_INTERNALS__.invoke` の包み込みは実アプリで不成立のため廃止。根拠は research.md)。接続後に `page.evaluate` で設置し(リロードしない)、`chrome.webview.postMessage` を包んで要求の JSON から `cmd`・`callback`・`error` を記録し、`__TAURI_INTERNALS__.callbacks`(Map)に自前の `get` を置いて、Rust からの `runCallback` が記録済みの id を引いた時点で完了(単調な連番と成否)を記録する。保険として `ipc.localhost` 宛ての `window.fetch` も記録する。設置時に `callbacks` が Map であることと `chrome.webview.postMessage` があることを確かめ、無ければ理由つきで失敗させる。観測したコマンドの一覧と「待ち受けを確定した以後に完了した特定のコマンドの応答」を待つ手段(確定時点の連番より後の完了だけを待つ)を提供する(製品は変えない)
@@ -88,7 +88,7 @@
   - _Depends: 1.5, 2.1_
   - _Requirements: 1.2, 1.6, 1.8, 1.9, 1.10, 2.1, 3.2, 4.1_
 
-- [ ] 3. シナリオ(1 ファイル 1 タスク。いずれも 2.3 の後に並列に進められる)
+- [x] 3. シナリオ(1 ファイル 1 タスク。いずれも 2.3 の後に並列に進められる)
 
 - [x] 3.1 (P) Hello World の実行のシナリオ(スモーク 3.1)を書く
   - 初期のソースを Run し、出力 `Hello World!`、「正常終了」、pc 106・dp 6・実行数 906 を検証し、読み込み・開始・実行のコマンド(`load_source`・`start_session`・`run_batch`)の要求と完了が実アプリの IPC(postMessage の要求と Rust からの `runCallback` の応答)で観測されたことを確かめる
@@ -136,7 +136,7 @@
   - _Boundary: Smoke13FocusRing_
   - _Requirements: 8.1, 8.2_
 
-- [ ] 4. CI と文書
+- [x] 4. CI と文書
 
 - [x] 4.1 (P) Windows の CI に webview の job を追加する
   - 独立したワークフローファイルに `e2e-webview` の job だけを置く(main への push とプルリクエストは対象のパスで絞り、手動の実行も受け付ける。`windows-latest`、job 単位で失敗を許容)
@@ -153,16 +153,16 @@
   - _Boundary: README_
   - _Requirements: 10.2, 10.3_
 
-- [ ] 5. 最終検証と記録
+- [x] 5. 最終検証と記録
 
-- [ ] 5.1 Windows で全体の検証を実行し、README に結果を記録する
+- [x] 5.1 Windows で全体の検証を実行し、README に結果を記録する
   - `npm run typecheck`、`npm run lint`、`npm test`、`npm run e2e:webview` を Windows の開発 PC で実行する(`timeout` コマンドは使わない。実行ファイルが固まった場合は除外を依頼し、新しい `CARGO_TARGET_DIR` で再実行する)。`apps/desktop/src-tauri` の `cargo test` も実行し、製品のテストが従来どおり成功することを確かめる
   - 上流の `npx playwright test --list` に webview のプロジェクトが含まれないこと、`npm test`(Vitest)の対象に `e2e/webview/` のファイルが含まれないこと、製品のソースに差分が無いこと(`git diff --stat` で `apps/desktop/src`、`src-tauri`、`crates/*/src`、`index.html`、`vite.config.ts`)を確かめる
   - `apps/desktop/README.md` の「検証結果の記録」に、実施日、WebView2 の版、通常の起動とテストの起動のブラウザプロセスの引数の比較(1.5)、各コマンドの結果と件数、E2E の成功・失敗・`fixme` の件数と理由を追記する。未実施の項目を合格と書かない
   - 完了条件: 上記のコマンドがすべて成功し、README に実施日つきの結果がある
   - _Requirements: 1.1, 1.2, 1.3, 1.11, 2.1, 2.2, 2.4, 3.3, 10.4_
 
-- [ ] 5.2 本 spec の traceability を作成する
+- [x] 5.2 本 spec の traceability を作成する
   - brief の In の各項目(スモーク 1、3.1、4、9.3、11.1〜11.3、11.5、11.6、11.7、13.3、CSP)を、シナリオのファイルとテスト名に対応づける。陽性対照のテストも載せる
   - Out の各項目を、「手動のまま(理由)」(ネイティブダイアログの見た目とモーダル性、ウィンドウのサイズ変更と最小サイズ、OS のライト・高コントラスト、NVDA、11.4 の実ウィンドウでの確認)と「対象外(担当する spec)」(ブラウザのスイートが担う項目)に分類する
   - 9.3 は「部分的」とする: webview は実行数が増え続けることだけを自動化し、1 秒の閾値はブラウザのスイートの `@perf` が担い、実アプリでの 1 秒の計測は手動のままであることを書く
