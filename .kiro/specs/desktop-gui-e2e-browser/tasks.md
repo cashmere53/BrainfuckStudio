@@ -19,7 +19,7 @@
   - _Boundary: BridgeProtocol, BridgeMain, BridgeDispatch, BridgeDocument(`crates/brainfuck-e2e-bridge/` の新規作成とルートの `Cargo.lock` の更新のみ)_
   - _Requirements: 2.1, 2.3, 3.4_
 
-- [ ] 1.2 E2E のための依存とツールの範囲を整える
+- [x] 1.2 E2E のための依存とツールの範囲を整える
   - E2E のランナー(`@playwright/test` ~1.65)を開発依存に追加し、lock ファイルを更新する。E2E の準備・実行・計測用の npm スクリプト(design の一覧どおり。ブリッジのビルドは `cargo build -p brainfuck-e2e-bridge`)と `typecheck:app` を追加する
   - E2E の型検査は新規の `tsconfig.e2e.json`(`tsconfig.json` を extends、`include` は `e2e`・`playwright.config.ts`・`src/ipc/backend.ts`、`exclude` は `e2e/.cache`)で行う。`tsconfig.json` は変えない。既存のスクリプトは `typecheck`(製品と E2E の両方を型検査する)と `build`(`typecheck:app` で製品だけを型検査してから `vite build`)の 2 つだけを design のとおりに書き換え、ほかは変えない。これで E2E の型の誤りは `npm run typecheck` で検出され、`npm run build` と `tauri build` は失敗しない
   - lint の除外にテストの出力ディレクトリとシムのビルド出力を加え、E2E のディレクトリに限ってフィクスチャの空の分割代入を許す
