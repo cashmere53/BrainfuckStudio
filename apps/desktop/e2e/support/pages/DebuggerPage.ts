@@ -66,6 +66,14 @@ export class DebuggerPage {
   readonly bracketMatched: Locator;
   /** 対応する括弧の強調(不一致) */
   readonly bracketUnmatched: Locator;
+  /** エラーの見出し(「解析エラー」「実行エラー」。ErrorBanner の見出しの段落) */
+  readonly errorHeading: Locator;
+  /** 実行エラーの位置の強調 */
+  readonly runtimeErrors: Locator;
+  /** ブレークポイントの命令文字の強調(text-decoration と枠で示す) */
+  readonly breakpointChars: Locator;
+  /** 出力の総バイト数の表示(「総バイト数: N バイト」。出力の領域の中) */
+  readonly outputTotal: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -86,6 +94,23 @@ export class DebuggerPage {
     this.parseErrors = page.locator(".cm-parse-error");
     this.bracketMatched = page.locator(".cm-bracket-matched");
     this.bracketUnmatched = page.locator(".cm-bracket-unmatched");
+    this.errorHeading = this.errorBanner.locator(".error-banner-heading");
+    this.runtimeErrors = page.locator(".cm-execution-runtime-error");
+    this.breakpointChars = page.locator(".cm-breakpoint-char");
+    this.outputTotal = this.region("出力").getByText(/^総バイト数: \d+ バイト$/);
+  }
+
+  /** 状態領域の項目名(dt)。完全一致で探す。補助ラベルの色の検証に使う */
+  statusTerm(term: StatusTerm): Locator {
+    return this.region("状態").locator(`xpath=.//dt[normalize-space(.)=${JSON.stringify(term)}]`);
+  }
+
+  /** 状態ラベルが指定の文言になるまで待つ(描画フレームごとに確かめる。Playwright の既定の間隔に依らない) */
+  async waitForStatusLabel(label: string): Promise<void> {
+    await this.page.waitForFunction(
+      (expected) => document.querySelector('[data-testid="status-label"]')?.textContent === expected,
+      label,
+    );
   }
 
   /** 画面を開き、エディタの表示を待つ(配信サーバのルートを開く) */
