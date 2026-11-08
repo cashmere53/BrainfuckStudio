@@ -48,6 +48,8 @@ export class DebuggerPage {
   readonly stepLimit: Locator;
   /** 上限なしのチェックボックス */
   readonly unlimited: Locator;
+  /** 上限なしの警告(role=status の文言で特定する。上限なしでないときは存在しない) */
+  readonly stepLimitWarning: Locator;
   /** 確認ダイアログ(role=alertdialog) */
   readonly confirmDialog: Locator;
   /** 操作エラーの表示(ErrorBanner。アクセシブルな名前を持たないため、クラス名で特定する) */
@@ -75,6 +77,7 @@ export class DebuggerPage {
     this.inputBox = page.getByRole("textbox", { name: "入力", exact: true });
     this.stepLimit = page.getByRole("textbox", { name: "命令数上限", exact: true });
     this.unlimited = page.getByRole("checkbox", { name: "上限なし", exact: true });
+    this.stepLimitWarning = page.getByRole("status").filter({ hasText: "上限なしで実行します" });
     this.confirmDialog = page.getByRole("alertdialog");
     this.errorBanner = page.locator(".error-banner");
     this.notices = page.getByLabel("通知", { exact: true });
