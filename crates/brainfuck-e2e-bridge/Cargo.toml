@@ -1,0 +1,21 @@
+[package]
+name = "brainfuck-e2e-bridge"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Test-only bridge that exposes the GUI API to the desktop E2E suite (not distributed)."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "brainfuck-e2e-bridge"
+path = "src/main.rs"
+
+[dependencies]
+brainfuck-gui-api = { path = "../brainfuck-gui-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

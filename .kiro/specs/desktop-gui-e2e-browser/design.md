@@ -582,6 +582,8 @@ export interface E2eBackend {
   readonly dialogs: DialogQueue;
   calls(cmd?: string): readonly RecordedCall[];
   requestWindowClose(): Promise<"eventEmitted" | "closedWithoutConfirmation">;
+  /** ブリッジへ中継して応答を返す。制御コマンド(`e2e:`)は記録しない。テストが直接使うのは起動の確認(e2e:ping)だけで、通常の検証はページ経由の呼び出しを記録して見る */
+  forward(cmd: string, payload: unknown): Promise<InvokeOutcome>;
 }
 export const test: TestType<PlaywrightTestArgs & { backend: E2eBackend; debuggerPage: DebuggerPage }, PlaywrightWorkerArgs>;
 export { expect } from "@playwright/test";
@@ -713,7 +715,7 @@ export const DIST_INDEX_PATH: string;                             // apps/deskto
 | `smoke-06-reset` | 6.1、6.2 | 初期状態への復帰、ブレークポイントと入力の保持、実行中の Reset ボタンと Shift+F5 の無効(5.5) |
 | `smoke-07-breakpoints` | 7.1〜7.4 | ガターと F9 の付け外し(6.1)、停止と再開(6.2)、入力欄での F9(6.3) |
 | `smoke-08-input-limit` | 8.1〜8.4 | 形式の切り替えと同じバイト列(6.4)、不正な 16 進(6.5)、不正な上限と直前の上限での実行(6.6)、上限での停止(5.6) |
-| `smoke-09-responsiveness` | 9.1、4.2・9.2・9.3(`@perf`) | 実行数の増加とホバー・選択への反応(10.1)。`@perf`: Run から Pause の受け付けまで、更新間隔の最大値、Pause 後の表示の追いつき(10.2、10.3)。時間計測のテストはこのファイルだけに置く |
+| `smoke-09-responsiveness` | 9.1、4.2・9.2・9.3(`@perf`) | 実行数の増加とホバー・選択への反応(10.1)。`@perf`: Pause のクリックから `pause` 呼び出しの完了(Pause の受け付け)まで、更新間隔の最大値、Pause 後の表示の追いつき(10.2、10.3)。時間計測のテストはこのファイルだけに置く |
 | `smoke-10-files-save` | 10.1(ダイアログ以外)〜10.5 | 保存・別名・キャンセル・書き込み失敗・保留中の編集(7.1〜7.4) |
 | `smoke-10-files-open` | 10.6〜10.9 | CRLF の保持・Shift_JIS・1 MiB 超・Ctrl+N / Ctrl+O の確認(7.5〜7.8) |
 | `smoke-11-close-and-defaults` | 11.1〜11.7 | 閉じる要求の模擬(8.1〜8.5)、F5 の自動リピート・Ctrl+R・Ctrl+F5 の `defaultPrevented` とナビゲーションなし(8.6)、右クリックの抑止と編集可能要素での非抑止(8.7) |
@@ -723,7 +725,7 @@ export const DIST_INDEX_PATH: string;                             // apps/deskto
 | `smoke-15-errors` | 15.1〜15.3、8.4 | 上限到達の実行エラー(5.6)、解析エラーの強調(5.7)、修正後の再実行(5.8) |
 
 シナリオの決め事:
-- 検証は自動リトライの assertion(`expect(locator).toHaveText` など)と `expect.poll` で書き、固定の待ち時間(`waitForTimeout`)を使わない
+- 検証は自動リトライの assertion(`expect(locator).toHaveText` など)と `expect.poll` で書き、固定の待ち時間(`waitForTimeout`)を使わない。例外: 遅れて届く呼び出しが無いことの否定の確認に限り、同期点の後に短い固定の待ち時間(`smoke-11-close-and-defaults.spec.ts` の `LATE_CALL_WINDOW_MS`)を使う。肯定の確認では使わない
 - 「増え続ける」「止まった」は時間の閾値を使わず、値の比較で判定する(例: 2 回の読み取りで値が増えた/Pause 後の 2 回の読み取りで同じ値)
 - 配色と強制配色は `page.emulateMedia({ colorScheme: "light" | "dark", forcedColors: "active" | "none" })` で切り替える
 - 製品の不具合を見つけたときは、製品を直さず該当テストを `test.fixme` にして、注釈(`type: "issue"`)に現象と追跡先を書き、README と traceability に記録する
