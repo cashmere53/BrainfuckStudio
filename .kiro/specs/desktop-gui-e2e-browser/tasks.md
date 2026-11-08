@@ -96,7 +96,7 @@
   - _Boundary: BridgeClient(新規の `e2e/support/bridge/bridgeClient.ts` とその単体テストのみ。`protocol.ts`・`dialogQueue.ts` は 3.1 の公開の形を使い、変えない)_
   - _Requirements: 1.6, 1.7, 2.2, 2.8_
 
-- [ ] 3.3 (P) ブリッジのコマンド一覧と Tauri の登録コマンドの一致を固定する
+- [x] 3.3 (P) ブリッジのコマンド一覧と Tauri の登録コマンドの一致を固定する
   - ブリッジの対応表のソース(`crates/brainfuck-e2e-bridge/src/dispatch.rs` の `COMMANDS`)からコマンド名の一覧を読み取り、登録の基準である `apps/desktop/src-tauri/src/commands/names.rs` の `COMMAND_NAMES` と集合で比べる単体テストを書く(既存のコマンド名の契約テストと同じく Rust のソースを読む方式)
   - ブリッジが扱わないコマンドは、テストの中の明示の除外一覧(コマンド名と理由)に置く(本 spec の時点では空)。`COMMANDS` と除外一覧の和が `COMMAND_NAMES` に等しく、両者が互いに素で、除外一覧に `COMMAND_NAMES` に無い名前が無いことを検査する。失敗の文面に、差のあるコマンド名と対処(ブリッジで対応する、または理由つきで除外一覧に入れる)を示す
   - 完了条件: `npm test` でこのテストが通り、比較の関数に `COMMAND_NAMES` にだけコマンドを足した入力・ブリッジにだけ足した入力・古い除外を残した入力を渡すと、それぞれ失敗することが単体テストで確認できる
