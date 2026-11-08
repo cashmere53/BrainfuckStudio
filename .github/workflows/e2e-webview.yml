@@ -1,0 +1,94 @@
+# 本 spec(desktop-gui-e2e-webview)の E2E スイート。Windows で実配布形(WebView2 の実アプリ)を検証する。
+# job は 1 つだけ。初期の運用では非必須(continue-on-error)で、失敗を結果に表示するが CI 全体やプルリクエストの取り込みは妨げない。
+# 基本 CI(Rust と フロントエンドの build / lint / test)とブラウザのスイートの CI(e2e-browser.yml)は変更しない。
+# 必須への昇格の条件: main で連続 10 回成功したら continue-on-error を外し、必須チェックへの登録を検討する(apps/desktop/README.md に記載)。
+name: e2e-webview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/desktop/**"
+      - "crates/brainfuck-gui-api/**"
+      - "crates/brainfuck-core/**"
+      - "examples/hello.bf"
+      - ".github/workflows/e2e-webview.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "crates/brainfuck-gui-api/**"
+      - "crates/brainfuck-core/**"
+      - "examples/hello.bf"
+      - ".github/workflows/e2e-webview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-webview:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Node 26 を導入
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Rust stable を導入
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust のビルドキャッシュ(実アプリの独立ワークスペース)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: WebView2 の Evergreen ランタイムを導入
+        shell: pwsh
+        run: |
+          $bootstrapper = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+          $install = Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "WebView2 の導入が終了コード $($install.ExitCode) で終わりました" }
+
+      - name: WebView2 の版を job の summary に記録
+        id: webview2
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'webview2-runtime.json'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./e2e/support/webview/windowsHost.ps1 -Action runtime > $out
+          if ($LASTEXITCODE -ne 0) { throw "WebView2 の版の取得に失敗しました" }
+          $result = Get-Content -Raw -LiteralPath $out | ConvertFrom-Json
+          $version = if ($null -eq $result.webView2Version) { '取得できませんでした(版が無い)' } else { $result.webView2Version }
+          "### WebView2 Runtime`n`n- 版: $version" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: 依存関係を導入
+        run: npm ci
+
+      - name: 実アプリの debug ビルド(準備)
+        run: npm run e2e:webview:prepare
+
+      - name: webview の E2E
+        run: npm run e2e:webview:run
+
+      # 失敗時の調査用の出力(HTML レポート、各シナリオの test-results。スクリーンショット・実アプリのログを含む)を保存する
+      - name: 失敗時の出力を保存
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-webview-output
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 14

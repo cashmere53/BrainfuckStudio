@@ -138,7 +138,7 @@
 
 - [ ] 4. CI と文書
 
-- [ ] 4.1 (P) Windows の CI に webview の job を追加する
+- [x] 4.1 (P) Windows の CI に webview の job を追加する
   - 独立したワークフローファイルに `e2e-webview` の job だけを置く(main への push とプルリクエストは対象のパスで絞り、手動の実行も受け付ける。`windows-latest`、job 単位で失敗を許容)
   - Node 26 と npm のキャッシュ、Rust stable とアプリの `target` のキャッシュ、WebView2 の Evergreen の導入と版の記録(job の summary)、`npm ci`、準備、実行、失敗時のレポートと出力の保存を行う。基本 CI とブラウザのスイートのワークフローは変更しない。アクションの版は実装時点の最新のメジャー版に固定する
   - 完了条件: ワークフローの YAML が構文として正しく(読み込みで解析できる)、job が 1 つだけで、job に失敗の許容があり、トリガに push・プルリクエスト・手動の 3 つがあり、版の記録の手順が補助スクリプトの版の取得の動作を呼んで job の summary に書き、Rust のキャッシュの対象がアプリの独立ワークスペース(`apps/desktop/src-tauri` の `target`)であることを読んで確かめられる。実際の実行はプルリクエストの初回で確かめ、結果を 5.1 の記録に含める
