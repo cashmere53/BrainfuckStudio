@@ -90,7 +90,7 @@
 
 - [ ] 3. シナリオ(1 ファイル 1 タスク。いずれも 2.3 の後に並列に進められる)
 
-- [ ] 3.1 (P) Hello World の実行のシナリオ(スモーク 3.1)を書く
+- [x] 3.1 (P) Hello World の実行のシナリオ(スモーク 3.1)を書く
   - 初期のソースを Run し、出力 `Hello World!`、「正常終了」、pc 106・dp 6・実行数 906 を検証し、読み込み・開始・実行のコマンド(`load_source`・`start_session`・`run_batch`)の要求と完了が実アプリの IPC(postMessage の要求と Rust からの `runCallback` の応答)で観測されたことを確かめる
   - 完了条件: Windows で `npm run e2e:webview:run -- <本ファイル>` のテストが成功する
   - _Boundary: Smoke03_
