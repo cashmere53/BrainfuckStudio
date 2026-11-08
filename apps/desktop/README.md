@@ -170,6 +170,72 @@ E2E は実ウィンドウと WebView2 の挙動を検証しません。次は別
 
 新しく作られた実行ファイル(ブリッジやテストの実行ファイル)を、ウイルス対策ソフトが止めて固まることがあります。プロセスが CPU を使わずに進まない場合は、リポジトリのフォルダー、`CARGO_TARGET_DIR`、`apps/desktop/e2e/.cache` を除外に追加するか、リアルタイム保護を一時停止してからやり直してください。同じビルドディレクトリで繰り返すとリンクに失敗することがあるため、新しい `CARGO_TARGET_DIR`(例: `C:/Users/<ユーザー名>/AppData/Local/Temp/kgtarget_e2e_<任意の名前>`)を指定すると回避できます。
 
+## E2E テスト(実アプリ・WebView2)
+
+ブラウザのスイートとは別に、実アプリ(`brainfuck-studio.exe` の debug ビルド)を起動し、WebView2 の上で検証する webview スイートがあります。**Windows 専用**です(PowerShell の補助スクリプト `pwsh`、`taskkill /T /F`、WebView2 を使います)。シナリオは `apps/desktop/e2e/webview/` にあり、支援のコードは `apps/desktop/e2e/support/webview/` にあります。
+
+以下のコマンドはすべて `apps/desktop` で実行します。
+
+### 準備と実行
+
+```sh
+cd apps/desktop
+mise exec node@26 -- npm ci
+mise exec node@26 -- npm run e2e:webview:prepare                 # 実アプリの debug ビルド(tauri build --debug --no-bundle)
+mise exec node@26 -- npm run e2e:webview:run                     # 準備の確認を行ってから webview のシナリオを実行
+mise exec node@26 -- npm run e2e:webview:run -- --list           # シナリオの一覧だけを表示
+mise exec node@26 -- npm run e2e:webview:run -- e2e/webview/smoke-01-startup.webview.spec.ts  # 1 つのシナリオだけ
+mise exec node@26 -- npm run e2e:webview                         # 準備と実行をまとめて行う
+```
+
+- `npm run e2e:webview:prepare` は実アプリの実行ファイル(`<CARGO_TARGET_DIR>/debug/brainfuck-studio.exe`。`CARGO_TARGET_DIR` が無ければ `src-tauri/target/debug/brainfuck-studio.exe`)と画面のビルド成果物 `dist/` を作ります。ビルドには数分かかります。
+- `tauri build` は `apps/desktop/src-tauri/Cargo.toml` を書き換えることがあります(feature の同期)。準備の後に `git status` で製品の差分が出たら、`git checkout -- src-tauri/Cargo.toml` で戻してください。
+- `npm run e2e:webview:run` は、実行の前に準備の確認を行います。Windows かどうか、WebView2 の版、実行ファイル、`dist/` の有無を見て、不足があれば一覧と準備のコマンドを示して終了コード 1 で止まります。
+- `E2E_APP_BIN` で実行ファイルを明示できます(相対パスは `apps/desktop` 基準)。別の場所で再ビルドした実行ファイルを試すときに使います。
+
+#### 環境変数
+
+| 変数 | 用途 |
+| --- | --- |
+| `E2E_APP_BIN` | 実アプリの実行ファイルを明示する。未指定なら `CARGO_TARGET_DIR` の下の `debug/`、それも無ければ `src-tauri/target/debug/` の `brainfuck-studio.exe` |
+| `E2E_APP_READY_MS` | アプリのデバッグ用の口が応答するまで待つ上限のミリ秒。既定は 60000。正の整数以外は既定になります。ウイルス対策ソフトの検査などで起動が遅いときに延ばします |
+
+アプリのデバッグ用の口(CDP)のポートは、シナリオごとに空きポートを自動で選びます。指定する手段はありません。
+
+### WebView2 の版の確認
+
+- 準備の確認は、WebView2 の版を EdgeUpdate の登録(`pv`。HKLM の `WOW6432Node`、続けて HKCU)から読み、結果の注釈に記録します。版が無ければ、準備の確認で失敗します。
+- シナリオごとに、アプリのデバッグ用の口の `/json/version` の `Browser`(`Edg/<版>`)も読み、そのシナリオの結果に記録します。
+- 手動で確かめるときは、Microsoft Edge WebView2 のランタイムの版を Windows の「インストールされているアプリ」で見るか、上記のレジストリの `pv` を見てください。
+
+### デバッグ用の口の扱い
+
+- デバッグ用の口は、テストが起動したアプリのプロセスだけに、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` で開きます。アプリの既定の引数は消えず、テストの起動のブラウザプロセスの引数に追加されるだけです。
+- 口は `127.0.0.1` にだけ開きます。テストの終了時には、起動したプロセスのツリーを `taskkill /T /F` で終わらせます。
+- 利用者データのフォルダは、シナリオごとの一時フォルダ(`<一時フォルダ>/bfstudio-e2e-webview/scenario-<uuid>`)です。通常の起動の利用者データには触れません。
+
+### 実行中の注意
+
+- **実行中は、キーボードとマウスを操作しないでください。** シナリオは OS のキー入力(F5、Ctrl+R など)と、実アプリのウィンドウの前面化・OS の閉じる要求を使います。途中で操作すると、結果が誤ったものになります。
+- 同時に複数の実行を走らせないでください。実アプリは 1 度に 1 つだけ起動します。
+- ウィンドウを前面にできない場合、キー入力は誰にも送らずに失敗します。そのシナリオは理由つきで失敗し、合格にはなりません。
+- 固まったアプリのプロセスは、再起動まで消えないことがあります。その場合は、タスクマネージャーなどで `brainfuck-studio.exe` を終了させてからやり直してください。
+
+### 自動化の範囲
+
+- **閉じる要求**は、タイトルバーの × ボタンの物理的なクリックではなく、OS の閉じる要求(ボタンと同じ経路)で代替しています。この代替は `.kiro/specs/desktop-gui-e2e-webview/traceability.md` にも記載しています。
+- 次の項目は自動化せず、手動のまま残しています。ネイティブダイアログの見た目とモーダル性、ウィンドウのサイズ変更と最小サイズ、OS の配色(ライト・高コントラスト)、スクリーンリーダー(NVDA)、実ウィンドウでの 11.4。
+- フォーカス枠(13.3)は、OS の現在の配色だけで確認します。配色の切り替えは確認していません。
+- 9.3 の 1 秒の応答性の計測は、ブラウザのスイートの `@perf` が担い、実アプリでの計測は手動のままです。webview では、上限なしの実行で実行数が増え続けることだけを確かめます。
+
+### 開発 PC でウイルス対策ソフトが止める場合
+
+新しく作られた実行ファイルが止められて固まる場合の対処(除外の設定、一時停止、新しい `CARGO_TARGET_DIR`)は、[開発 PC でウイルス対策ソフトが止める場合](#開発-pc-でウイルス対策ソフトが止める場合)(ブラウザのスイート)と同じです。ここでは重複して書きません。
+
+### CI の job(非必須)
+
+GitHub Actions の `e2e-webview` job(`windows-latest`)は、`continue-on-error: true` の非必須です。webview スイートの失敗は結果に表示されますが、CI 全体の失敗や、プルリクエストの取り込みの妨げにはなりません。失敗時のレポートとスクリーンショット、実アプリのログは成果物として保存されます。`main` で連続 10 回成功したら、`continue-on-error` を外して必須のチェックへの登録を検討してください。
+
 ## 型の再生成
 
 Rust 側の DTO を変えたときは、TypeScript の型を再生成します。
