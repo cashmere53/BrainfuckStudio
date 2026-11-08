@@ -286,7 +286,7 @@
   - _Boundary: CiWorkflow_
   - _Requirements: 11.1, 11.2, 11.3, 11.4_
 
-- [ ] 7.2 (P) README に E2E の節を追加する
+- [x] 7.2 (P) README に E2E の節を追加する
   - 準備(ブラウザの導入、`npm run e2e:prepare`)、実行(`npm run e2e`、表示しての実行、計測の `npm run e2e:perf`)、レポートと失敗時の出力の場所、ポートの変更方法(`E2E_PORT`)、事前確認の省略(`E2E_SKIP_PREREQ=1`)、ブリッジの実行ファイル(crate `crates/brainfuck-e2e-bridge`、`target/debug/brainfuck-e2e-bridge[.exe]`)の指定方法(`E2E_BRIDGE_BIN`)を書く
   - 型検査の分担(`npm run typecheck` は製品と E2E、`npm run build` は製品だけ)と、Tauri 層のコマンド・文書状態を変えたときにブリッジの契約テストと指紋テストが失敗する理由と対処を書く
   - 開発 PC でウイルス対策ソフトが新しい実行ファイル(ブリッジ・テストの実行ファイル)を止めて固まる場合の対処(除外の設定または一時停止、新しい `CARGO_TARGET_DIR`)を書く

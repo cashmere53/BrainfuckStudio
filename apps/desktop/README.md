@@ -80,6 +80,94 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- 
 
 アプリ側のテストには、コマンド名の登録・ビルド設定・ケイパビリティの一致検査、ケイパビリティの内容検査(`fs`・`shell`・`http`・`dialog`・`core:window:*` の許可が無いこと)、I/O エラーの変換、終了ガードの判定が含まれます。
 
+## E2E テスト(ブラウザ)
+
+手動スモーク手順の 1〜15 のうち、ブラウザで観測できる項目を Playwright で自動化したテストです。画面は `npm run build` の成果物を `vite preview` で配信し、Chromium で描画・操作します。バックエンドはテストごとに起動する Rust のブリッジ(`crates/brainfuck-e2e-bridge`)が担い、アプリと同じ `brainfuck-gui-api` の実装を通します。シナリオは `apps/desktop/e2e/specs/` にあります。
+
+以下のコマンドはすべて `apps/desktop` で実行します。
+
+### 準備
+
+前提(Node 26、Rust)に加えて、Chromium を導入します。
+
+```sh
+cd apps/desktop
+mise exec node@26 -- npm ci
+mise exec node@26 -- npx playwright install chromium
+mise exec node@26 -- npm run e2e:prepare
+```
+
+`npm run e2e:prepare` は次の 3 つを作ります。
+
+- 画面のビルド成果物: `dist/`(`npm run build`)
+- ブリッジの実行ファイル: `target/debug/brainfuck-e2e-bridge.exe`(Windows の場合。`npm run e2e:bridge` が `cargo build -p brainfuck-e2e-bridge` を実行する)
+- IPC シムのビルド成果物: `e2e/.cache/ipc-shim.js`(`npm run e2e:shim`)
+
+準備物が足りないと、テストの起動前に不足の一覧と準備のコマンドを示して止まります。
+
+### 実行
+
+```sh
+cd apps/desktop
+mise exec node@26 -- npm run e2e                  # 準備を含めて実行(chromium プロジェクト。@perf を除く)
+mise exec node@26 -- npm run e2e -- --headed      # ブラウザを表示して実行
+mise exec node@26 -- npm run e2e:perf             # 計測(@perf を付けたシナリオだけ。準備を含む)
+mise exec node@26 -- npm run e2e:run              # 準備を省いて実行(Playwright の引数をそのまま渡せる)
+```
+
+`npm run e2e:run` は準備を行わないため、準備済みの成果物を使って繰り返し実行するときや、特定のシナリオだけを試すときに使います(例: `npm run e2e:run -- e2e/specs/smoke-03-hello-world.spec.ts`)。
+
+#### 環境変数
+
+| 変数 | 用途 |
+| --- | --- |
+| `E2E_PORT` | 配信ポート。既定は `14273`(開発サーバの `1420` と分けている)。例: `E2E_PORT=14300 npm run e2e`(PowerShell では `$env:E2E_PORT=14300; npm run e2e`) |
+| `E2E_SKIP_PREREQ=1` | 準備物の事前確認を省く。`--list`・`show-report` のように準備物が要らない用途向けです。準備物が無い状態で実行すると、テストは失敗します |
+| `E2E_BRIDGE_BIN` | ブリッジの実行ファイルを明示する(相対パスは `apps/desktop` 基準)。事前確認と実行で使う実行ファイルが決まります。`npm run e2e` の準備は既定の場所にビルドするため、別の場所のブリッジを使うときは、そのブリッジを指定して `npm run e2e:run` を使ってください |
+
+ブリッジの実行ファイルの場所は、次の順で決まります。`E2E_BRIDGE_BIN` があればその場所、無ければ `CARGO_TARGET_DIR` の下の `debug/`、どちらも無ければリポジトリの `target/debug/` です。
+
+### レポートと失敗時の出力
+
+- **HTML レポート**: `apps/desktop/playwright-report/`。実行の後に生成されます(ローカルでは自動では開きません)。開くには `E2E_SKIP_PREREQ=1 mise exec node@26 -- npx playwright show-report` を実行します。
+- **失敗時の出力**: `apps/desktop/test-results/`。失敗したテストのスクリーンショット(`only-on-failure`)、トレース(`retain-on-failure`)、エラーの文脈が入ります。トレースは `npx playwright show-trace <trace.zip のパス>` で開けます。
+- **CI の再試行**: CI では失敗したテストを 1 回だけ再試行します。再試行で通ったものは flaky として報告に残ります。ローカルは再試行しません。
+
+### 並列度と製品の不具合の記録
+
+- 複数のブラウザやブリッジが同時に動くマシンでは、`page.goto` が `ERR_ABORTED` や 30 秒のタイムアウトになることがあります。単独で実行すると通るため、そのときは `mise exec node@26 -- npm run e2e:run -- --project=chromium --workers=1` で 1 つずつ実行してください(準備は済んでいること)。
+- 製品の不具合を見つけたシナリオは製品を直さず、`test.fixme` にして注釈(`type: "issue"`)に現象と追跡先を書いています。現在の 2 件は次のとおりです。
+  1. スモーク 4.2(`smoke-02-editing.spec.ts`): 取り消しで保存時点と同じ内容に戻っても、未保存の表示が消えない(上流 desktop-gui 2.2。`apps/desktop/src/state/workspace.ts` の `setSource`)。
+  2. スモーク 5(`smoke-05-step.spec.ts`): 最後の命令を Step した直後、状態ラベルは「正常終了」になるが、Step と Run が有効のまま(上流 4.7・4.8。`apps/desktop/src/state/debuggerStore.ts` の `applyStep`)。
+- 追跡先は `.kiro/specs/desktop-gui-e2e-browser/traceability.md` の「見つけた製品の不具合」です。
+
+### 型検査の分担
+
+- `npm run typecheck`: 製品(`tsconfig.json`)と E2E(`tsconfig.e2e.json`)の両方を検査します。
+- `npm run build`: 製品だけを検査してから `vite build` を行います。E2E の型の誤りは `npm run build` では検出されません。
+
+### ブリッジと Tauri 層の乖離を検出するテスト
+
+ブリッジは `src-tauri` の振る舞いを複製しています。次の変更があると、対応するテストが失敗します。
+
+- **コマンドの追加・削除**(`src-tauri/src/commands/names.rs` の `COMMAND_NAMES` が基準): `apps/desktop/e2e/support/bridge/commandContract.test.ts` が、登録・ブリッジ・除外の不一致を、差のあるコマンド名とともに示します。対処は、ブリッジで対応する(`crates/brainfuck-e2e-bridge/src/dispatch.rs` の `COMMANDS` と分岐に足す)か、理由つきで `EXCLUDED_COMMANDS` に入れることです。
+- **複製している区間の変更**(`src-tauri/src/app_state.rs`、`commands/files.rs`、`window.rs` の該当部分): `apps/desktop/e2e/support/bridge/tauriFingerprint.test.ts` が、区間の名前・固定値・現在値を示します。対処は次の順です。
+  1. 複製先(`crates/brainfuck-e2e-bridge/src/document.rs`、`dispatch.rs`)を、変更後の Tauri 層の振る舞いに合わせる(ブリッジで対応する、または差を理由つきで残す)。
+  2. `cargo test -p brainfuck-e2e-bridge` が通ることを確認する。
+  3. `tauriFingerprint.test.ts` の固定値を、失敗の文面に出た現在値に置き換える。
+
+### E2E が検証しないこと
+
+E2E は実ウィンドウと WebView2 の挙動を検証しません。次は別の手段で扱います。
+
+- `desktop-gui-e2e-webview` が扱うもの: 実ウィンドウの × による閉じる確認(スモーク 11.1〜11.3、11.5)、実際のリロード(11.6)、WebView2 の右クリックメニュー(11.7)、CSP の実効、13.3 の実 WebView2 での描画、1・3.1・4・9.3 の実 IPC での確認。E2E では、リロードのキー入力(Ctrl+R など)で既定動作が抑止されることを、`defaultPrevented` と `framenavigated` が 0 回であることで確認します。実際にリロードされないことは、キー入力では確かめられません。
+- 手動のまま(webview も対象外)のもの: ネイティブダイアログの見た目とモーダル性(10.1)、ウィンドウの最小サイズの強制(12)、スクリーンリーダー(NVDA)での読み上げ(14.4)。
+- Rust の別のテストが担うもの: スモーク 3.2(CLI との結果一致。`crates/brainfuck-gui-api/tests/cli_parity_real.rs`)。
+
+### 開発 PC でウイルス対策ソフトが止める場合
+
+新しく作られた実行ファイル(ブリッジやテストの実行ファイル)を、ウイルス対策ソフトが止めて固まることがあります。プロセスが CPU を使わずに進まない場合は、リポジトリのフォルダー、`CARGO_TARGET_DIR`、`apps/desktop/e2e/.cache` を除外に追加するか、リアルタイム保護を一時停止してからやり直してください。同じビルドディレクトリで繰り返すとリンクに失敗することがあるため、新しい `CARGO_TARGET_DIR`(例: `C:/Users/<ユーザー名>/AppData/Local/Temp/kgtarget_e2e_<任意の名前>`)を指定すると回避できます。
+
 ## 型の再生成
 
 Rust 側の DTO を変えたときは、TypeScript の型を再生成します。
