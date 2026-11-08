@@ -382,6 +382,35 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 - ソースが長いと、エディタが内容の高さまで伸びてページ全体がスクロールします。
 - `npm run tauri build` は**未実施**です。
 
+### E2E(ブラウザ)の検証結果
+
+2026-11-08 に、`desktop-gui-e2e-browser` の最終検証を実施しました。
+
+| 項目 | 結果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | 成功 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 成功(警告なし) |
+| `cargo test --workspace` | 成功。56 テストバイナリ・1,007 件が成功、失敗 0(ブリッジの crate `brainfuck-e2e-bridge` のテストを含む) |
+| `npm run typecheck`(製品と E2E) | 成功 |
+| `npm run lint` | 成功 |
+| `npm test`(vitest) | 成功。57 ファイル・1,011 件が成功(E2E の補助の単体テストを含む) |
+| `npm run build` | 成功。`dist/` に IPC シム(`__bfE2e`)は含まれない |
+| `npx playwright test --project=chromium`(`npm run e2e:run`) | 成功。4 ワーカーの並列で、88 件のうち 86 件が成功、2 件が `test.fixme`(下記)、失敗 0(1.2 分)。`--workers=1` で `--repeat-each=3` を直列に実行しても、258 件が成功、6 件(`fixme` の 2 件 × 3)がスキップ、失敗 0 |
+| `npx playwright test --project=perf`(`npm run e2e:perf`) | 成功。3 件が成功。実測値(直列、`--repeat-each=3` の範囲): Run から Pause の受け付けまで 164〜174 ms、実行数の表示の更新間隔の最大 69〜75 ms、Pause 後の表示の追いつき 22〜24 ms(いずれも閾値 1,500 ms 以下) |
+| 製品のソースの差分 | なし(`apps/desktop/src`、`src-tauri`、`index.html`、`vite.config.ts`、`tsconfig.json`、既存の `crates/*` に変更なし。新設は `crates/brainfuck-e2e-bridge/`、設定、文書、ワークフローのみ) |
+| `cargo tree -i brainfuck-e2e-bridge` | 自身のみ(他の crate はブリッジに依存しない) |
+
+`test.fixme` の 2 件(製品の不具合として記録。追跡先は `.kiro/specs/desktop-gui-e2e-browser/traceability.md` の「見つけた製品の不具合」):
+
+1. スモーク 4.2(`smoke-02-editing.spec.ts`): 取り消しで保存時点と同じ内容に戻っても、未保存の表示が消えない(上流 desktop-gui 2.2)。
+2. スモーク 5(`smoke-05-step.spec.ts`): 最後の命令を Step した直後、状態ラベルは「正常終了」になるが、Step と Run が有効のまま(上流 4.7・4.8)。
+
+実施時の注意:
+
+- 実行した E2E は、実機のテストではなく Chromium と実 Rust のブリッジによるものです。実ウィンドウ・WebView2 の挙動(OS の閉じるボタン、実リロード、WebView2 の右クリックメニュー、CSP の実効、ネイティブダイアログ)は `desktop-gui-e2e-webview` の範囲、または手動のままです。
+- この開発 PC では、新しくビルドされたブリッジの実行ファイルがウイルス対策ソフトに止められ、起動時に固まりました(新しい `CARGO_TARGET_DIR` で再ビルドした実行ファイルが `e2e:ping` に応答しなかった)。上の E2E は、すでに実行済みで起動できるブリッジ(同じソースからビルドしたもの)を `E2E_BRIDGE_BIN` で指定して実行しました。新しいビルドで E2E を回すには、ウイルス対策ソフトの除外設定が必要です。GitHub Actions(Linux)の job は未実行で、PR の CI で初めて確認されます。
+- 安定性: 複数のブラウザやブリッジが同時に動くマシン(例: 他の作業が走っている間)では、`page.goto` がタイムアウトすることがあります。単独の実行では通ります。
+
 ## トラブルシューティング
 
 - **ビルドスクリプトやテストの実行ファイルが起動時に固まる**: 新しく作られた実行ファイルの起動を、ウイルス対策ソフトが止めている場合があります。プロセスが CPU を使わず進まない場合は、リポジトリのフォルダー、`CARGO_TARGET_DIR` に指定したフォルダー、`.cargo` を、ウイルス対策ソフトの除外に追加してから、やり直してください。固まったプロセスは終了できないことがあり、その場合は再起動で消えます。同じビルドディレクトリで繰り返すと、実行ファイルのロックでリンクに失敗することがあるため、新しい `CARGO_TARGET_DIR` を指定すると回避できます。

@@ -297,14 +297,14 @@
 
 - [ ] 8. 最終検証と記録
 
-- [ ] 8.1 全体の検証を実行し、README に結果を記録する
+- [x] 8.1 全体の検証を実行し、README に結果を記録する
   - `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check`、`npm run typecheck`、`npm run lint`、`npm test`、`npm run build`、`npm run e2e`、`npm run e2e:perf` をローカルで実行する(`timeout` コマンドは使わない。ブリッジやテストの実行ファイルが固まった場合はウイルス対策ソフトの除外を依頼し、新しい `CARGO_TARGET_DIR` で再実行する)
   - 製品のソースに差分が無いこと(`git diff --stat` で `apps/desktop/src`、`src-tauri`、既存の `crates/*/src` と `crates/brainfuck-gui-api/Cargo.toml`、`index.html`、`vite.config.ts`、`tsconfig.json` に変更が無い。新設の `crates/brainfuck-e2e-bridge/` は対象外)と、`npm run build` の成果物にシムが含まれないこと、`cargo tree -i brainfuck-e2e-bridge` に自身以外が現れないことを確認する
   - `apps/desktop/README.md` の「検証結果の記録」に、実施日、各コマンドの結果と件数、E2E の成功・失敗・`fixme` の件数と理由、計測値を追記する。未実施の項目を合格と書かない
   - 完了条件: 上記のコマンドがすべて成功し(計測の失敗は記録した上で許容)、README に実施日つきの結果がある
   - _Requirements: 1.1, 1.2, 1.4, 3.1, 3.2, 3.3, 3.5, 10.3, 12.4_
 
-- [ ] 8.2 本 spec の traceability を作成する
+- [x] 8.2 本 spec の traceability を作成する
   - 手動スモーク 1〜15 の全項目(枝番を含む)を、「自動化済み(シナリオのファイルとテスト名)」「手動のまま(理由)」「対象外(担当する spec またはテスト)」に分類した表を作る。実ウィンドウの ×(11.1〜11.3、11.5)、実際のリロード(11.6)、WebView2 の右クリックメニュー(11.7)、CSP の実効、13.3 の実 WebView2 での描画、1・3.1・4・9.3 の実 IPC での確認は、ブラウザで自動化した部分をその行に書いたうえで、実アプリでの確認を `desktop-gui-e2e-webview` が担うことを備考に書く。10.1 のダイアログの見た目とモーダル性と、12 の実ウィンドウでの最小サイズの強制は「手動のまま(`desktop-gui-e2e-webview` も対象外)」、3.2 は `cli_parity_real.rs`、14.4 は手動とする
   - 14.1・14.2 はブラウザのエミュレーションによる代替で、OS の設定そのものの確認ではないことを明記する。`fixme` にした検証と、見つけた製品の不具合の追跡先を記載する
   - `.kiro/specs/desktop-gui/traceability.md` は変更しない
