@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod limits;
+pub mod methods;
 mod observation;
 mod report;
 
