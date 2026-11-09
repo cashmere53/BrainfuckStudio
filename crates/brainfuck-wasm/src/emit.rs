@@ -1,8 +1,8 @@
 //! コード生成(`OptimizedProgram` → WASM バイト列)。
 //!
-//! 2.7 の範囲: 直線的な操作(`Add` / `Move` / `Output` / `Input`)、一般ループ(`LoopStart` / `LoopEnd`)、
-//! クリアと移動/加算/乗算ループ(`Clear` / `Transfer`)を生成する。
-//! 走査(`Scan`)と未知の操作種別は「常に離脱」として生成し、後続のタスク(2.8)が置き換える。
+//! 直線的な操作(`Add` / `Move` / `Output` / `Input`)、一般ループ(`LoopStart` / `LoopEnd`)、
+//! クリアと移動/加算/乗算ループ(`Clear` / `Transfer`)、走査ループ(`Scan`)を生成する。
+//! 未知の操作種別は「常に離脱」として生成する(上流の公開型は `non_exhaustive` のため、既定の分岐はここに残す)。
 //!
 //! クリアと転送のコストはセル値 `v` に依る(`Clear`: `1 + 2x`、`Transfer`: `1 + v(B + 1)`)。
 //! 式は `Op::naive_cost` の閉形式と一致させ、定数(`B + 1`)は上流のヘルパから得る。
@@ -53,6 +53,8 @@ const LOCAL_STEPS: u32 = 3;
 const LOCAL_COST: u32 = 4;
 /// 開始セルの値 `v`(i32)。動的なコスト・範囲条件・係数で使う。
 const LOCAL_CELL: u32 = 5;
+/// 走査の作業用の位置 `pos`(i32)。`dp` は走査が 0 のセルに至った時だけ書き戻す。
+const LOCAL_POS: u32 = 6;
 
 /// 型添字: `() -> i32`(`bf.read`)。
 const TYPE_READ: u32 = 0;
@@ -89,11 +91,12 @@ const CELL: MemArg = MemArg {
 /// 生成物が `MAX_MODULE_BYTES` を超える、または数値が生成コードの表現範囲を超える場合は
 /// `CompileError::ModuleTooLarge`。
 pub(crate) fn emit(ir: &OptimizedProgram) -> Result<Vec<u8>, CompileError> {
-    // 局所変数: dp(i32)、pc(i32)、steps(i64)、cost(i64)、cell(i32)。いずれも 0 で初期化される。
+    // 局所変数: dp(i32)、pc(i32)、steps(i64)、cost(i64)、cell(i32)、pos(i32)。いずれも 0 で初期化される。
     let mut body = Function::new([
         (2, ValType::I32),
         (1, ValType::I64),
         (1, ValType::I64),
+        (1, ValType::I32),
         (1, ValType::I32),
     ]);
 
@@ -277,7 +280,8 @@ fn emit_op(f: &mut Function, op: &Op, nest: &mut Nesting) -> Result<(), CompileE
             Some(reach) => emit_transfer(f, op, terms, reach, depth)?,
             None => always_bail(f, depth),
         },
-        // 残りの操作(走査)と未知の操作種別は、後続のタスク(2.8)が置き換えるまで常に離脱する。
+        OpKind::Scan { stride } => emit_scan(f, op, *stride, depth)?,
+        // 上流の `OpKind` は `non_exhaustive` のため、知らない種別は常に離脱する(状態は変えない)。
         _ => always_bail(f, depth),
     }
     Ok(())
@@ -317,6 +321,57 @@ fn emit_transfer(
     f.instruction(&Instruction::LocalGet(LOCAL_DP));
     f.instruction(&Instruction::I32Const(0));
     f.instruction(&Instruction::I32Store8(CELL));
+    Ok(())
+}
+
+/// 走査ループ(`Scan`)。開始セル `v` が 0 なら本体は実行されないためコスト 1 で何もしない。
+/// 非 0 なら作業用の位置 `pos` を `stride` ずつ進め、0 のセルに至るまで反復する。
+/// 各反復の前に範囲外を、後に予算超過を検査して、該当すれば `dp` と `steps` を変更せずに離脱する。
+/// 0 のセルに至れば `dp` へ `pos` を書き戻し、コストを加算する。テープは変更しない。
+fn emit_scan(f: &mut Function, op: &Op, stride: isize, depth: u32) -> Result<(), CompileError> {
+    let step = i32::try_from(stride).map_err(|_| CompileError::ModuleTooLarge)?;
+    // 1 反復あたりの実行数 `m + 1`。`naive_cost(1, 1) = 1 + (m + 1)` から上流ヘルパの値を得る。
+    let per_iteration = op.naive_cost(1, 1).saturating_sub(1);
+
+    // 作業用の位置を dp から始め、`[` の 1 を数える(検査は離脱先の深さ `depth`)。
+    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    f.instruction(&Instruction::LocalSet(LOCAL_POS));
+    f.instruction(&Instruction::I64Const(to_i64(op.naive_cost(0, 0))?));
+    f.instruction(&Instruction::LocalSet(LOCAL_COST));
+    guard_dynamic_cost(f, depth);
+    load_cell(f);
+
+    // block { 0 なら脱出(br_if 0)  loop { 範囲外なら離脱 ・ pos += stride ・ cost += m+1 ・ 予算超過なら離脱 ・ pos のセルが 0 なら脱出(br_if 1) ・ 続行(br 0) } }
+    // 離脱先までの深さは、内側に開いた block と loop の分だけ増える。
+    let (min, max) = (stride.min(0), stride.max(0));
+    f.instruction(&Instruction::Block(BlockType::Empty));
+    f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+    f.instruction(&Instruction::I32Eqz);
+    f.instruction(&Instruction::BrIf(0));
+    f.instruction(&Instruction::Loop(BlockType::Empty));
+    reach_out_condition_from(f, LOCAL_POS, min, max)?;
+    f.instruction(&Instruction::BrIf(depth + 2));
+    f.instruction(&Instruction::LocalGet(LOCAL_POS));
+    f.instruction(&Instruction::I32Const(step));
+    f.instruction(&Instruction::I32Add);
+    f.instruction(&Instruction::LocalSet(LOCAL_POS));
+    f.instruction(&Instruction::LocalGet(LOCAL_COST));
+    f.instruction(&Instruction::I64Const(to_i64(per_iteration)?));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalSet(LOCAL_COST));
+    guard_dynamic_cost(f, depth + 2);
+    f.instruction(&Instruction::LocalGet(LOCAL_POS));
+    f.instruction(&Instruction::I32Load8U(CELL));
+    f.instruction(&Instruction::I32Eqz);
+    f.instruction(&Instruction::BrIf(1));
+    f.instruction(&Instruction::Br(0));
+    f.instruction(&Instruction::End); // loop
+    f.instruction(&Instruction::End); // block
+
+    // 0 のセルに至った(または開始セルが 0)。dp を書き戻し、コストを加算する。
+    f.instruction(&Instruction::LocalGet(LOCAL_POS));
+    f.instruction(&Instruction::LocalSet(LOCAL_DP));
+    charge_dynamic(f);
     Ok(())
 }
 
@@ -386,8 +441,18 @@ fn guard_reach(f: &mut Function, min: isize, max: isize, depth: u32) -> Result<(
 
 /// 到達範囲がテープを越えるかの条件を i32(真なら 1)としてスタックに積む。
 fn reach_out_condition(f: &mut Function, min: isize, max: isize) -> Result<(), CompileError> {
-    // dp < -min
-    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    reach_out_condition_from(f, LOCAL_DP, min, max)
+}
+
+/// `from` の局所変数の位置を基準にした到達範囲の条件(`reach_out_condition` の一般形)。
+fn reach_out_condition_from(
+    f: &mut Function,
+    from: u32,
+    min: isize,
+    max: isize,
+) -> Result<(), CompileError> {
+    // from < -min
+    f.instruction(&Instruction::LocalGet(from));
     f.instruction(&Instruction::I64ExtendI32U);
     f.instruction(&Instruction::I64Const(
         i64_of(min)?
@@ -395,8 +460,8 @@ fn reach_out_condition(f: &mut Function, min: isize, max: isize) -> Result<(), C
             .ok_or(CompileError::ModuleTooLarge)?,
     ));
     f.instruction(&Instruction::I64LtS);
-    // dp > LAST_CELL - max
-    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    // from > LAST_CELL - max
+    f.instruction(&Instruction::LocalGet(from));
     f.instruction(&Instruction::I64ExtendI32U);
     f.instruction(&Instruction::I64Const(
         LAST_CELL
@@ -684,12 +749,13 @@ mod tests {
     }
 
     #[test]
-    fn scan_still_bails_at_its_start_until_task_2_8() {
-        // `+` の後の `[>]`(Scan)は 2.8 までの既定により常に離脱する。
+    fn scan_on_a_nonzero_cell_completes_in_place() {
+        // `+` の後の `[>]`(Scan)は作業用の位置で走査し、0 のセルで止まる。コストは 1 + 1 × 2 = 3。
         let result = run_source("+[>]", &[], 100);
-        assert_eq!(result.status, Status::Bailout);
-        assert_eq!(result.pc, 1);
-        assert_eq!(result.steps, 1);
+        assert_eq!(result.status, Status::Halted);
+        assert_eq!(result.pc, 4);
+        assert_eq!(result.dp, 1);
+        assert_eq!(result.steps, 1 + 1 + 2);
         assert_eq!(result.tape[0], 1);
     }
 
