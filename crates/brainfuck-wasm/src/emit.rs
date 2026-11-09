@@ -1,8 +1,12 @@
 //! コード生成(`OptimizedProgram` → WASM バイト列)。
 //!
-//! 2.6 の範囲: 直線的な操作(`Add` / `Move` / `Output` / `Input`)と一般ループ(`LoopStart` / `LoopEnd`)を生成する。
-//! クリア・移動ループ・走査(`Clear` / `Transfer` / `Scan`)と未知の操作種別は「常に離脱」として生成し、
-//! 後続のタスク(2.7・2.8)が種別ごとに置き換える。
+//! 2.7 の範囲: 直線的な操作(`Add` / `Move` / `Output` / `Input`)、一般ループ(`LoopStart` / `LoopEnd`)、
+//! クリアと移動/加算/乗算ループ(`Clear` / `Transfer`)を生成する。
+//! 走査(`Scan`)と未知の操作種別は「常に離脱」として生成し、後続のタスク(2.8)が置き換える。
+//!
+//! クリアと転送のコストはセル値 `v` に依る(`Clear`: `1 + 2x`、`Transfer`: `1 + v(B + 1)`)。
+//! 式は `Op::naive_cost` の閉形式と一致させ、定数(`B + 1`)は上流のヘルパから得る。
+//! 転送の範囲条件は `v != 0` のときだけ評価し、`v != 0` のときだけ係数を適用する(`v = 0` で範囲外に触れない)。
 //!
 //! 生成規則: 各操作の前に `pc` へ操作の先頭の命令添字を書き、検査(コスト・到達範囲)が
 //! 成立しなければ `br` で離脱先へ分岐する。検査はすべて状態を変更する前に行う。
@@ -14,7 +18,7 @@
 
 #![allow(dead_code)] // 公開窓口(2.4)から呼ばれるまでは未使用(`abi.rs` と同じ扱い)
 
-use brainfuck_optimized::{Op, OpKind, OptimizedProgram};
+use brainfuck_optimized::{Op, OpKind, OptimizedProgram, Term};
 use wasm_encoder::{
     BlockType, CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
     ImportSection, Instruction, MemArg, MemArgTarget, MemorySection, MemoryType, Module,
@@ -45,6 +49,10 @@ const LOCAL_DP: u32 = 1;
 const LOCAL_PC: u32 = 2;
 /// 実行数 `steps`(i64)。
 const LOCAL_STEPS: u32 = 3;
+/// 今の操作の素朴換算コスト `cost`(i64)。動的なコスト(クリア・転送)で使う。
+const LOCAL_COST: u32 = 4;
+/// 開始セルの値 `v`(i32)。動的なコスト・範囲条件・係数で使う。
+const LOCAL_CELL: u32 = 5;
 
 /// 型添字: `() -> i32`(`bf.read`)。
 const TYPE_READ: u32 = 0;
@@ -81,8 +89,13 @@ const CELL: MemArg = MemArg {
 /// 生成物が `MAX_MODULE_BYTES` を超える、または数値が生成コードの表現範囲を超える場合は
 /// `CompileError::ModuleTooLarge`。
 pub(crate) fn emit(ir: &OptimizedProgram) -> Result<Vec<u8>, CompileError> {
-    // 局所変数: dp(i32)、pc(i32)、steps(i64)。いずれも 0 で初期化される。
-    let mut body = Function::new([(2, ValType::I32), (1, ValType::I64)]);
+    // 局所変数: dp(i32)、pc(i32)、steps(i64)、cost(i64)、cell(i32)。いずれも 0 で初期化される。
+    let mut body = Function::new([
+        (2, ValType::I32),
+        (1, ValType::I64),
+        (1, ValType::I64),
+        (1, ValType::I32),
+    ]);
 
     // 離脱先のブロック。すべての操作の検査失敗はここへ分岐する。
     body.instruction(&Instruction::Block(BlockType::Empty));
@@ -240,10 +253,111 @@ fn emit_op(f: &mut Function, op: &Op, nest: &mut Nesting) -> Result<(), CompileE
             nest.frames -= 2;
             nest.loops -= 1;
         }
-        // 直線的でない残りの操作(クリア・移動ループ・走査)と未知の操作種別は、
-        // 後続のタスクが種別ごとに置き換えるまで常に離脱する。
+        OpKind::Clear { increments } => {
+            load_cell(f);
+            // 実行数 1 + 2x。`[-]` は x = v、`[+]` は x = (256 - v) mod 256(v = 0 のとき 1)。
+            if *increments {
+                f.instruction(&Instruction::I32Const(256));
+                f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+                f.instruction(&Instruction::I32Sub);
+                f.instruction(&Instruction::I32Const(0xFF));
+                f.instruction(&Instruction::I32And);
+            } else {
+                f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+            }
+            set_cost_affine(f, 2)?;
+            guard_dynamic_cost(f, depth);
+            charge_dynamic(f);
+            // tape[dp] = 0
+            f.instruction(&Instruction::LocalGet(LOCAL_DP));
+            f.instruction(&Instruction::I32Const(0));
+            f.instruction(&Instruction::I32Store8(CELL));
+        }
+        OpKind::Transfer { terms, .. } => match op.static_reach() {
+            Some(reach) => emit_transfer(f, op, terms, reach, depth)?,
+            None => always_bail(f, depth),
+        },
+        // 残りの操作(走査)と未知の操作種別は、後続のタスク(2.8)が置き換えるまで常に離脱する。
         _ => always_bail(f, depth),
     }
+    Ok(())
+}
+
+/// 移動/加算/乗算ループ(`Transfer`)。開始セル `v` が 0 なら本体は実行されないためコスト 1 で何もしない。
+/// `v != 0` のときだけ、コスト `1 + v(B + 1)`・到達範囲を検査してから各項を加算し、セルを 0 にする。
+fn emit_transfer(
+    f: &mut Function,
+    op: &Op,
+    terms: &[Term],
+    (min, max): (isize, isize),
+    depth: u32,
+) -> Result<(), CompileError> {
+    // 1 反復あたりの実行数 `B + 1`。`naive_cost(1, 0) = 1 + (B + 1)` から上流ヘルパの値を得る。
+    let per_iteration = op.naive_cost(1, 0).saturating_sub(1);
+    load_cell(f);
+    f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+    set_cost_affine(f, per_iteration)?;
+    guard_dynamic_cost(f, depth);
+    // 範囲外に出る(`v != 0` かつ到達範囲がテープを越える)なら、実行数を加算する前に離脱する。
+    reach_out_condition(f, min, max)?;
+    f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::I32Ne);
+    f.instruction(&Instruction::I32And);
+    f.instruction(&Instruction::BrIf(depth));
+    charge_dynamic(f);
+    // `v != 0` のときだけ各項を加算する(`v = 0` では範囲外の番地に触れない)。
+    f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+    f.instruction(&Instruction::If(BlockType::Empty));
+    for term in terms {
+        apply_term(f, term)?;
+    }
+    f.instruction(&Instruction::End);
+    // 開始セルは 0 になる(`v = 0` のときも 0 のまま)。
+    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    f.instruction(&Instruction::I32Const(0));
+    f.instruction(&Instruction::I32Store8(CELL));
+    Ok(())
+}
+
+/// 1 項の加算: `tape[dp + offset] += v * factor`(`store8` で mod 256)。
+fn apply_term(f: &mut Function, term: &Term) -> Result<(), CompileError> {
+    let offset = i32::try_from(term.offset).map_err(|_| CompileError::ModuleTooLarge)?;
+    // 書き込み先の番地(store の先頭オペランド)。
+    push_address(f, offset);
+    // 現在値 + v × factor(i32 の中で計算し、store8 が下位 8 ビットを格納する)。
+    push_address(f, offset);
+    f.instruction(&Instruction::I32Load8U(CELL));
+    f.instruction(&Instruction::LocalGet(LOCAL_CELL));
+    f.instruction(&Instruction::I32Const(i32::from(term.factor)));
+    f.instruction(&Instruction::I32Mul);
+    f.instruction(&Instruction::I32Add);
+    f.instruction(&Instruction::I32Store8(CELL));
+    Ok(())
+}
+
+/// 番地 `dp + offset` を積む。
+fn push_address(f: &mut Function, offset: i32) {
+    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    f.instruction(&Instruction::I32Const(offset));
+    f.instruction(&Instruction::I32Add);
+}
+
+/// 現在セルを `LOCAL_CELL` へ読む。
+fn load_cell(f: &mut Function) {
+    f.instruction(&Instruction::LocalGet(LOCAL_DP));
+    f.instruction(&Instruction::I32Load8U(CELL));
+    f.instruction(&Instruction::LocalSet(LOCAL_CELL));
+}
+
+/// スタック上の i32 の `x` から、実行数 `1 + x × factor` を `LOCAL_COST` へ設定する。
+fn set_cost_affine(f: &mut Function, factor: u64) -> Result<(), CompileError> {
+    f.instruction(&Instruction::I64ExtendI32U);
+    f.instruction(&Instruction::I64Const(to_i64(factor)?));
+    f.instruction(&Instruction::I64Mul);
+    f.instruction(&Instruction::I64Const(1));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalSet(LOCAL_COST));
     Ok(())
 }
 
@@ -265,6 +379,13 @@ fn guard_cost(f: &mut Function, cost: u64, depth: u32) -> Result<(), CompileErro
 
 /// 到達範囲検査: `dp + min < 0` または `dp + max > LAST_CELL` なら離脱する。`depth` は離脱先までの深さ。
 fn guard_reach(f: &mut Function, min: isize, max: isize, depth: u32) -> Result<(), CompileError> {
+    reach_out_condition(f, min, max)?;
+    f.instruction(&Instruction::BrIf(depth));
+    Ok(())
+}
+
+/// 到達範囲がテープを越えるかの条件を i32(真なら 1)としてスタックに積む。
+fn reach_out_condition(f: &mut Function, min: isize, max: isize) -> Result<(), CompileError> {
     // dp < -min
     f.instruction(&Instruction::LocalGet(LOCAL_DP));
     f.instruction(&Instruction::I64ExtendI32U);
@@ -284,8 +405,25 @@ fn guard_reach(f: &mut Function, min: isize, max: isize, depth: u32) -> Result<(
     ));
     f.instruction(&Instruction::I64GtS);
     f.instruction(&Instruction::I32Or);
-    f.instruction(&Instruction::BrIf(depth));
     Ok(())
+}
+
+/// 動的コスト検査: `remaining = limit - steps` が `LOCAL_COST` 未満なら離脱する。`depth` は離脱先までの深さ。
+fn guard_dynamic_cost(f: &mut Function, depth: u32) {
+    f.instruction(&Instruction::LocalGet(LOCAL_LIMIT));
+    f.instruction(&Instruction::LocalGet(LOCAL_STEPS));
+    f.instruction(&Instruction::I64Sub);
+    f.instruction(&Instruction::LocalGet(LOCAL_COST));
+    f.instruction(&Instruction::I64LtS);
+    f.instruction(&Instruction::BrIf(depth));
+}
+
+/// 動的な実行数の加算: `steps += cost`。検査の後にだけ呼ぶ。
+fn charge_dynamic(f: &mut Function) {
+    f.instruction(&Instruction::LocalGet(LOCAL_STEPS));
+    f.instruction(&Instruction::LocalGet(LOCAL_COST));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalSet(LOCAL_STEPS));
 }
 
 /// 実行数の加算: `steps += cost`。検査の後にだけ呼ぶ(`steps + cost <= limit` が保証される)。
@@ -546,12 +684,22 @@ mod tests {
     }
 
     #[test]
-    fn non_linear_operations_always_bail_at_their_start() {
-        // `+` の後の `[-]`(Clear)は 2.3 の既定により常に離脱する。
-        let result = run_source("+[-]", &[], 100);
+    fn scan_still_bails_at_its_start_until_task_2_8() {
+        // `+` の後の `[>]`(Scan)は 2.8 までの既定により常に離脱する。
+        let result = run_source("+[>]", &[], 100);
         assert_eq!(result.status, Status::Bailout);
         assert_eq!(result.pc, 1);
         assert_eq!(result.steps, 1);
         assert_eq!(result.tape[0], 1);
+    }
+
+    #[test]
+    fn clear_is_applied_in_place_without_bailing() {
+        // `+` の後の `[-]`(Clear)は一括適用され、離脱せず完走する。
+        let result = run_source("+[-]", &[], 100);
+        assert_eq!(result.status, Status::Halted);
+        assert_eq!(result.pc, 4);
+        assert_eq!(result.steps, 1 + 1 + 2);
+        assert_eq!(result.tape[0], 0);
     }
 }
