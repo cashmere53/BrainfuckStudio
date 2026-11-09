@@ -501,7 +501,7 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 - **既定のコンテキストメニューの検出**: 最初の実装は UI Automation のルート直下の `Menu` を探しており、メニューが出ていても常に偽でした(11.7 の否定が何があっても合格する状態)。陽性対照が見つけ、`Chrome_WidgetWin_*` の最上位ウィンドウを列挙して UIA の部分木から `Menu` を探す形に直しました。
 - **前面化**: Windows の前面化ロックで `AppActivate` だけでは実アプリが前面にならず、OS のキー入力が失敗しました。復元と `AttachThreadInput` による `SetForegroundWindow` を足しました(入力を送らずに前面化を試し、前面にならなければ何も送らずに失敗する。送信の直前直後に前面を再確認する)。
 - 新しくビルドした実行ファイルは、この開発 PC で Avast に止められずに起動できました(以前は、新しくビルドした別の実行ファイルが固まったことがあります)。固まる場合は「トラブルシューティング」を参照してください。
-- GitHub Actions の `e2e-webview` の job は、まだ実行していません。最初のプルリクエストで確認し、結果で必須への昇格を判断します。
+- GitHub Actions の `e2e-webview` の job は PR #14 で実行しましたが、`windows-latest` のランナー(WebView2 ランタイム 157.0.4341.42)では、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` が msedgewebview2 の起動引数に反映されず(`WEBVIEW2_USER_DATA_FOLDER` は反映される)、CDP の口が開かないため全シナリオが `AppLaunchError`(notReady)で失敗しました。ローカル(ランタイム 158.0.4370.7)では成功します。原因は未解明で、job は `continue-on-error` の非必須のままとし、必須への昇格は見送ります。
 
 ## トラブルシューティング
 
