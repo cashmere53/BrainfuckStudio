@@ -18,8 +18,20 @@ type ContractInput = {
   readonly excluded: readonly { readonly name: string; readonly reason: string }[];
 };
 
-/** 本 spec の時点では除外は空。除外するときは理由を書いて入れる。 */
-const EXCLUDED_COMMANDS: ContractInput["excluded"] = [];
+/**
+ * ブリッジが扱わないコマンドの除外一覧。除外するときは理由を書いて入れる。
+ * 比較機能はブラウザ E2E の対象外。ブリッジに brainfuck-compare-api と wasmi の依存を持ち込まないため、比較の 2 件は除外する。
+ */
+const EXCLUDED_COMMANDS: ContractInput["excluded"] = [
+  {
+    name: "get_comparison_info",
+    reason: "比較画面はブラウザ E2E の対象外。ブリッジに brainfuck-compare-api と wasmi の依存を持ち込まない",
+  },
+  {
+    name: "run_comparison",
+    reason: "比較画面はブラウザ E2E の対象外。ブリッジに brainfuck-compare-api と wasmi の依存を持ち込まない",
+  },
+];
 
 const REMEDY_REGISTERED =
   "ブリッジで対応する(dispatch.rs の COMMANDS と dispatch の分岐に足す)、または理由つきで EXCLUDED_COMMANDS に入れる";
@@ -225,7 +237,7 @@ describe("ブリッジのコマンド一覧の契約", () => {
     const input = realInput();
     const differences = findContractDifferences({
       ...input,
-      excluded: [{ name: "load_source", reason: "古い除外" }],
+      excluded: [...input.excluded, { name: "load_source", reason: "古い除外" }],
     });
     expect(differences).toEqual([
       "load_source: ブリッジで対応するのに EXCLUDED_COMMANDS にも入っている。対処: EXCLUDED_COMMANDS から外す",
@@ -236,7 +248,7 @@ describe("ブリッジのコマンド一覧の契約", () => {
     const input = realInput();
     const differences = findContractDifferences({
       ...input,
-      excluded: [{ name: "removed_command", reason: "古い除外" }],
+      excluded: [...input.excluded, { name: "removed_command", reason: "古い除外" }],
     });
     expect(differences).toEqual([
       "removed_command: EXCLUDED_COMMANDS にあるが COMMAND_NAMES に無い。対処: EXCLUDED_COMMANDS から消す",

@@ -6,13 +6,13 @@ import type { ApiError } from "../generated/ApiError";
 import type { ComparisonInfoDto } from "../generated/ComparisonInfoDto";
 import type { ComparisonResultDto } from "../generated/ComparisonResultDto";
 import type { RunComparisonRequest } from "../generated/RunComparisonRequest";
-import { invokeCommand } from "../ipc/backend";
+import { COMMANDS, invokeCommand } from "../ipc/backend";
 import { normalizeApiError } from "../ipc/errors";
 
-/** 比較の Tauri コマンド名(Rust の関数名と一致) */
+/** 比較の Tauri コマンド名。名前の正本は共有の `COMMANDS`(contract.test.ts が names.rs と比べる) */
 export const COMPARISON_COMMANDS = {
-  getInfo: "get_comparison_info",
-  run: "run_comparison",
+  getInfo: COMMANDS.getComparisonInfo,
+  run: COMMANDS.runComparison,
 } as const;
 
 /** 比較の窓口。失敗は `ApiError` として reject する */

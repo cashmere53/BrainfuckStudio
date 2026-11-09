@@ -589,6 +589,18 @@ mod tests {
     }
 
     #[test]
+    fn comparison_commands_are_excluded_and_rejected_as_unknown() {
+        // 比較の 2 件はブラウザ E2E の除外一覧(e2e/support/bridge/commandContract.test.ts)にある。
+        // 呼ばれても未対応として文字列エラーで拒否する。
+        let state = BridgeState::default();
+        for name in ["get_comparison_info", "run_comparison"] {
+            let error = call(&state, name, json!({"args": null})).expect_err("excluded");
+            assert!(matches!(error, DispatchError::UnknownCommand(_)), "{name}");
+            assert!(error.to_error_value().is_string());
+        }
+    }
+
+    #[test]
     fn service_errors_stay_structured() {
         let state = BridgeState::default();
         let error = call(

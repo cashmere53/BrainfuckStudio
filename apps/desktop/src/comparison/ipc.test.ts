@@ -4,7 +4,7 @@ import type { ApiError } from "../generated/ApiError";
 import type { ComparisonInfoDto } from "../generated/ComparisonInfoDto";
 import type { ComparisonResultDto } from "../generated/ComparisonResultDto";
 import type { RunComparisonRequest } from "../generated/RunComparisonRequest";
-import { invokeCommand } from "../ipc/backend";
+import { COMMANDS, invokeCommand } from "../ipc/backend";
 import { COMPARISON_COMMANDS, createFakeComparisonBackend, tauriComparisonBackend } from "./ipc";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -35,6 +35,8 @@ const RESULT: ComparisonResultDto = { kind: "completed", limit: 100, overall: "a
 describe("tauriComparisonBackend: 共有ヘルパ invokeCommand 経由の呼び出し", () => {
   it("コマンド名は get_comparison_info / run_comparison で、引数は { args } の 1 個にまとめる", async () => {
     expect(COMPARISON_COMMANDS).toEqual({ getInfo: "get_comparison_info", run: "run_comparison" });
+    expect(COMMANDS.getComparisonInfo).toBe(COMPARISON_COMMANDS.getInfo);
+    expect(COMMANDS.runComparison).toBe(COMPARISON_COMMANDS.run);
 
     invokeMock.mockResolvedValueOnce(INFO);
     await expect(tauriComparisonBackend.getInfo()).resolves.toEqual(INFO);

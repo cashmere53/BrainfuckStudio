@@ -52,7 +52,7 @@
 - `brainfuck-wasm` 内の依存方向: `limits` / `abi` / `error` ← `emit` / `audit` / `runtime`(3 者は互いに import しない)← `program`(統括。`emit` → `audit` → `runtime` のロード、実行後の離脱時のみ上流 `brainfuck_optimized::replay` を呼ぶ)← `lib`(re-export)。`wasmi` の型は `runtime.rs` の外へ出さない。素朴意味論の再生コードは持たない(`replay.rs` は存在しない)
 - `brainfuck-compare` 内の依存方向: `limits` / `observation` / `report` ← `methods` ← `compare` ← `lib`
 - `brainfuck-compare-api` 内の依存方向: `dto` ← `service` ← `lib`(`service` が `brainfuck-compare` / `brainfuck_gui_api::{convert, codec, limits}` / `brainfuck_core::tape_window_of` を呼ぶ)
-- フロント: `generated` ← `comparison/ipc` ← `comparison/domain` ← `comparison/state` ← `comparison/components` ← `comparison/ComparisonScreen`。`desktop-gui` の `state/workspace`(`useWorkspace()` と `WorkspaceValues` 型)、`ipc/backend.ts` の `invokeCommand<T>()`(`{ args }` 1 個の規約と `ApiError` の正規化を含む)、`domain/{inputBytes,stepLimit,base64,outputBuffer,outputFormat}`、`ipc/errors` は**読み取り利用のみ**(逆向きに `desktop-gui` が `comparison/` を import しない。登録は `app/screens.ts` の 1 行のみ)。invoke の呼び出しと `ApiError` の正規化を再実装しない
+- フロント: `generated` ← `comparison/ipc` ← `comparison/domain` ← `comparison/state` ← `comparison/components` ← `comparison/ComparisonScreen`。`desktop-gui` の `state/workspace`(`useWorkspace()` と `WorkspaceValues` 型)、`ipc/backend.ts` の `invokeCommand<T>()`(`{ args }` 1 個の規約と `ApiError` の正規化を含む)、`domain/{inputBytes,stepLimit,base64,outputBuffer,outputFormat}`、`ipc/errors` は**読み取り利用のみ**(逆向きに `desktop-gui` が `comparison/` を import しない。登録は `app/screens.ts` の 1 行のみ)。invoke の呼び出しと `ApiError` の正規化を再実装しない。比較コントローラはアプリの生存期間で `app/screens.ts` の `createScreens`(DI)に 1 つ置き、画面切替で結果・実行状態・古い結果判定を保持する(チェックボックスと繰り返し回数はローカル状態で初期値に戻る)
 - 禁止: 外部供給の WASM の読み込み、WASI、`std::process` / ファイル / ネットワークの使用、`unsafe`、`any`
 
 ### Revalidation Triggers
@@ -168,10 +168,10 @@ crates/brainfuck-wasm/                       # 新規。生成・監査・隔離
 │   ├── runtime.rs                           # wasmi の Engine / Store / Linker、ホスト関数(read / write)、ResourceLimiter、燃料。エンジンの型はここで閉じる
 │   └── program.rs                           # WasmProgram::compile / run、WasmRun。emit → audit → ロード、実行 → 離脱時は線形メモリの状態を上流 `brainfuck_optimized::replay` へ渡して読み戻す(ReplayStateError → RunError::InvalidState)
 ├── tests/
-│   ├── emit_structure.rs                    # 公開の compile 経由: 生成物が検証・監査を通る、決定的、空プログラム、全 OpKind、ループ入れ子上限、サイズ上限
-│   ├── run_basic.rs                         # API 契約: 同一 WasmProgram を異なる入力・上限で独立実行、空プログラム、hello(ワークスペースの `examples/hello.bf` を `include_str!`。コピーを置かない)/ echo(`,[.,]` を直接記述)
-│   ├── vs_core.rs                           # WASM 側の核との差分テスト(代表プログラム × 上限 0..=N+2 × 左右端 × 入力バリエーション。広い網羅は brainfuck-compare)
-│   ├── cost_oracle.rs                       # `Op::naive_cost` / `Op::static_reach` をオラクルとした、生成コードの実行数・離脱条件の検証
+│   ├── emit_loops.rs                        # 一般ループ(LoopStart / LoopEnd)を含むプログラムの WASM 生成に対する差分テストと構造テスト(素朴実装が正解)
+│   ├── emit_clear_transfer.rs               # クリア(`[-]` / `[+]`)と移動/加算/乗算ループ(Transfer)の WASM 生成に対する差分テストと構造テスト
+│   ├── emit_scan.rs                         # 走査(Scan)の WASM 生成に対する差分テストと構造テスト
+│   ├── linear_diff.rs                       # 直線的な操作のみ(加減算・移動・入出力・空プログラム)の WASM 実行と素朴実装の差分テスト
 │   └── common/mod.rs                        # WasmRun と core の Machine の完全比較ヘルパ、上限掃引(この crate のテスト専用)
 └── (crate 内の #[cfg(test)]: audit.rs = 監査の肯定/否定(手組みの違反モジュール: 余分な import / メモリ拡張可 / テーブル / start / memory.grow など。外部モジュールを受け取る公開入口を作らないため)、emit.rs = 公開窓口の実装前の構造確認、runtime.rs = 燃料の枯渇・メモリ拡張の拒否・出力量上限、program.rs = 手組みの不整合な途中状態が `RunError::InvalidState` になること)
 
@@ -186,12 +186,14 @@ crates/brainfuck-compare/                    # 新規。観測・方式実行・
 │   └── compare.rs                           # compare(): 基準を先に実行、選択方式を実行、繰り返し・中央値・一貫性、判定・総合結果、要求の検証
 ├── tests/
 │   ├── common/mod.rs                        # run_pair(方式 vs 素朴の完全状態比較)、enumerate_balanced、XorShift64、sweep_limits
+│   ├── helpers_selftest.rs                  # 共通基盤(tests/common)の自己テスト(壊した観測の注入・件数の既知値で差分テストの検出力を確認)
 │   ├── observation.rs                       # diff が項目ごとに不一致を検出する、digest の決定性(要件 13.9)
-│   ├── comparison_api.rs                    # 基準が先頭、方式選択、繰り返し・中央値、一貫性違反 → 失敗、未対応が他方式を妨げない、決定性(9.11)、要求検証
-│   ├── diff_smoke.rs                        # 最適化・WASM の手書き数本の一致(最適化方式の差分テストはここだけ。網羅的な差分は optimized-interpreter が持つ)と、一致判定が不一致を検出すること
-│   ├── diff_exhaustive.rs / diff_random.rs / diff_patterns.rs / diff_limits.rs / diff_edges_io.rs   # WASM を素朴と比較する差分テスト一式。hello は `include_str!("../../../examples/hello.bf")`(コピーを置かない)
-│   ├── regression.rs                        # tests/regression/*.bf を include_str! で読む回帰テスト
-│   └── regression/                          # 最小再現(初期は規約実証用に 1 件)
+│   ├── diff_smoke.rs                        # スモーク(13.1, 13.9): 手書き数本で最適化・WASM が素朴と一致し、一致判定が項目ごとの破損を検出すること
+│   ├── exhaustive_random.rs                 # 網羅・乱数の差分テスト(13.1, 13.2, 13.3, 13.11): WASM 方式を素朴と全数・固定シードで比較
+│   ├── patterns.rs                          # パターン別の差分テスト(13.4): 連続命令・クリア・移動/加算/乗算・走査のテンプレートと、近いが条件を満たさない形
+│   ├── limits_edges.rs                      # 上限掃引・端・入出力の差分テスト(13.1, 13.5–13.7, 13.11): 代表プログラムを WASM 方式で素朴と比較
+│   ├── regression.rs                        # 回帰規約(13.10): tests/regression/*.bf を 1 ファイル 1 テストで読み、全数で比較する
+│   └── regression/                          # 最小再現(初期は規約実証用に 1 件: comment_only.bf)
 └── (README は設けない。文書は docs/compiler-comparison.md に集約)
 
 crates/brainfuck-compare-api/                # 新規。比較の契約とサービス(brainfuck-gui-api には一切触れない)
@@ -205,7 +207,8 @@ crates/brainfuck-compare-api/                # 新規。比較の契約とサー
     ├── comparison_contract.rs               # DTO の JSON 形、要求検証
     ├── comparison_service.rs                # 解析エラー、素朴行とデバッガ経路(brainfuck_gui_api::DebuggerService)の一致、出力末尾・テープ窓、総合結果、直列化
     ├── bindings_up_to_date.rs               # 比較用 DTO の生成結果とコミット済み generated/ の該当ファイルの一致(共通 DTO のファイルは gui-api 側の検査が所有)
-    └── dependency_isolation.rs              # brainfuck-gui-api の Cargo.toml が比較・WASM 系の依存を含まないこと
+    ├── dependency_isolation.rs              # brainfuck-gui-api の Cargo.toml が比較・WASM 系の依存を含まないこと
+    └── reuse_surface.rs                     # 再利用する公開項目がクレート外から使えることのコンパイル確認(欠ければコンパイルエラー)
 
 apps/desktop/src-tauri/src/commands/comparison.rs   # 新規: get_comparison_info / run_comparison(spawn_blocking)
 
@@ -229,7 +232,10 @@ docs/compiler-comparison.md                  # 新規: 使い方、方式と安�
 - `apps/desktop/src-tauri/Cargo.toml` — `brainfuck-compare-api`(path)を依存に追加(`brainfuck-gui-api` への依存は既存のまま)。専用 `Cargo.lock` を更新し、`serde` / `ts-rs` / `wasmi` / `wasm-encoder` / `wasmparser` をルートの `Cargo.lock` と同一バージョンに揃える
 - `apps/desktop/src-tauri/src/app_state.rs` — `comparison: Arc<ComparisonService>`(`brainfuck_compare_api`)を追加し `manage`
 - `apps/desktop/src-tauri/src/commands/mod.rs` — `comparison` モジュールと登録一覧への 2 コマンドの追加(`generate_handler!` は `commands/mod.rs` の一覧からのみ構築されるため、`lib.rs` にコマンド名を足さない)
-- `apps/desktop/src-tauri/build.rs` — `AppManifest::commands` に 2 コマンドを追記
+- `apps/desktop/src-tauri/src/commands/names.rs` — `COMMAND_NAMES` に 2 コマンドを追記(`build.rs` がこの一覧を `AppManifest::commands` へ渡すため、`build.rs` 自体は変更しない)
+- `apps/desktop/src/ipc/backend.ts` — `COMMANDS` に `getComparisonInfo` / `runComparison` を追加のみ(既存のキーと形は変えない。`comparison/ipc.ts` の名前はここを参照する)
+- `apps/desktop/e2e/support/bridge/commandContract.test.ts` — 除外一覧 `EXCLUDED_COMMANDS` に 2 件を理由つきで追加(比較画面はブラウザ E2E の対象外。ブリッジに brainfuck-compare-api と wasmi の依存を持ち込まない)
+- `crates/brainfuck-e2e-bridge/src/dispatch.rs` — 除外した 2 コマンドが未対応として文字列エラーで拒否されることを確かめるテストを追加(ブリッジの対応表は変更しない)
 - `apps/desktop/src-tauri/capabilities/default.json` — 2 コマンドの allow を追記(ファイル/シェル/HTTP/ダイアログの権限は付与しない)
 - `apps/desktop/src/app/screens.ts` — `ScreenDefinition` を 1 件追加(`id: "comparison"`、タイトル「比較」)
 - `apps/desktop/src/generated/` — 比較用 DTO の生成物を追加コミット(既存ファイルは変更しない)
@@ -776,12 +782,12 @@ function deriveRequest(ws: WorkspaceValues, sel: Selection, info: ComparisonInfo
   { ok: true; request: RunComparisonRequest } | { ok: false; reason: InvalidReason };
 ```
 - `deriveRequest` は純粋関数(`WorkspaceValues` は desktop-gui の Workspace モジュールが export する `Pick<WorkspaceState, "source" | "input" | "limit">`)。`parseStepLimit`(上限なしは `unlimited`、1 未満・非整数は `invalidLimit`、`info.maxSteps` 超過は `limitTooLarge`)、`parseInput`(16 進不正は `invalidInput`)、Base64 化、ソースの UTF-8 サイズ検査(1 MiB)を行う
-- `comparisonStore`(reducer + `ComparisonController`): `{ phase: "idle" | "running" | "done" | "failed", requestId, result | null, usedSnapshot | null, error: ApiError | null }`。`run()` は要求 ID を採番し、応答の要求 ID が最新のときだけ反映する(古い応答は破棄)。実行時の `{source, input, limit}` を `usedSnapshot` に保持し、現在の `Workspace` と値が異なれば「古い結果」とする(要件 11.8)。デバッガの `debuggerStore` / `RunController` を参照・変更しない(要件 11.11)
+- `comparisonStore`(reducer + `ComparisonController`): `{ phase: "idle" | "running" | "done" | "failed", requestId, result | null, usedSnapshot | null, error: ApiError | null }`。`run()` は要求 ID を採番し、応答の要求 ID が最新のときだけ反映する(古い応答は破棄)。実行時の `{source, input, limit}` を `usedSnapshot` に保持し、現在の `Workspace` と値が異なれば「古い結果」とする(要件 11.8)。デバッガの `debuggerStore` / `RunController` を参照・変更しない(要件 11.11)。比較コントローラはアプリの生存期間で `app/screens.ts` の `createScreens`(DI)に 1 つ置き、画面切替で結果・実行状態・古い結果判定を保持する(チェックボックスと繰り返し回数はローカル状態で初期値に戻る)
 - `comparisonFormat`: 時間は μs → 「1.23 ms」などの自動単位、単位は「素朴: 実行命令数」「最適化: IR 操作回数」「なし」、終了状態は「正常停止 / ポインタ範囲外(pc, dp, 方向) / 命令数上限超過(上限, pc)」、判定は「基準」「一致 ✓」「不一致 ✗(項目名の日本語)」「未対応」「失敗」(記号 + 文言で、色だけに頼らない)、総合は「すべて一致」「不一致あり」「未対応または失敗あり」
 - `definitions`: 凡例文 — 「素朴実装換算の実行数: 素朴インタプリタが同じ実行で数える命令数。全方式で同じ定義・同じ値になる」「方式固有の単位: 素朴 = 実行した命令数、最適化 = IR 操作の実行回数(連続命令やループを 1 回と数える)、WASM = 数えない」。免責文 —「実行時間は観察の対象であり、性能や正しさの保証ではありません」
 
 #### components / ComparisonScreen
-- `ComparisonScreen`: `useWorkspace()` で共有値を読み、`MethodOptions`(最適化・WASM のチェックボックス、繰り返し回数の数値入力。ラベル付き)、実行ボタン(無効時は理由を `aria-describedby` で結び付けて表示)、実行中表示(`aria-busy`)、`OverallBanner`、`ResultTable`、`UnitLegend`、免責文を並べる。解析エラー時は `ParseErrorDto` の種類・命令添字・行/列を表示し、表は出さない。古い結果には「条件が変更されています(再実行してください)」を表示
+- `ComparisonScreen`: `useWorkspace()` で共有値を読み、`MethodOptions`(最適化・WASM のチェックボックス、繰り返し回数の数値入力。ラベル付き)、実行ボタン(無効時は理由を `aria-describedby` で結び付けて表示)、実行中表示(`aria-busy`)、`OverallBanner`、`ResultTable`、`UnitLegend`、免責文を並べる。解析エラー時は `ParseErrorDto` の種類・命令添字・行/列を表示し、表は出さない。古い結果には「条件が変更されています(再実行してください)」を表示。比較コントローラはアプリの生存期間で `app/screens.ts` の `createScreens`(DI)に 1 つ置き、画面切替で結果・実行状態・古い結果判定を保持する(チェックボックスと繰り返し回数はローカル状態で初期値に戻る)
 - `ResultTable`: 1 方式 1 行(`<table>` + 行見出し)。列: 方式 / 判定 / 準備時間 / 実行時間(回数) / 換算実行数 / 方式固有の単位 / 終了状態 / 成果物(WASM のみ。再生がある場合は「ホスト再生 N 命令」)。行ごとに `<details>` で `ExitStateDetail`(エラーのフィールド、`pc`/`dp`/現在セル/入力読取位置、出力の長さと末尾(テキスト / 16 進は desktop-gui の `outputFormat` を再利用)、`TapeStrip`(窓のセルを 16 進で横に並べ `dp` を枠 + ラベルで強調)、テープのダイジェスト)を展開。時間の大小に基づく並び替え・順位・色分けはしない
 - キーボード: すべてネイティブの `button` / `input` / `details` で操作でき、タブ順は論理順。画面切替は desktop-gui のシェル(`screens.length > 1` で出るタブ)に従う
 

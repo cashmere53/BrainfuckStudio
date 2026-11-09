@@ -39,6 +39,8 @@ export const COMMANDS = {
   saveSourceFile: "save_source_file",
   setDocumentDirty: "set_document_dirty",
   confirmExit: "confirm_exit",
+  getComparisonInfo: "get_comparison_info",
+  runComparison: "run_comparison",
 } as const;
 
 /** ウィンドウを閉じる要求のイベント名(Rust の `window::CLOSE_REQUESTED_EVENT` と一致) */
