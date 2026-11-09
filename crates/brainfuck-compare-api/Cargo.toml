@@ -1,0 +1,17 @@
+[package]
+name = "brainfuck-compare-api"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brainfuck-core = { path = "../brainfuck-core" }
+brainfuck-compare = { path = "../brainfuck-compare" }
+brainfuck-gui-api = { path = "../brainfuck-gui-api" }
+serde = { version = "1", features = ["derive"] }
+ts-rs = "12"
+
+[dev-dependencies]
+serde_json = "1"

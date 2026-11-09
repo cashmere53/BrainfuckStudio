@@ -31,6 +31,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainfuck-compare-api"
+version = "0.1.0"
+dependencies = [
+ "brainfuck-compare",
+ "brainfuck-core",
+ "brainfuck-gui-api",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "brainfuck-core"
 version = "0.1.0"
 
