@@ -18,7 +18,7 @@
 //!   離脱後の再生は上流の公開 `brainfuck_optimized::replay` が行い、素朴意味論はこの crate に複製しない
 //! - 外部供給の WASM を読み込む経路は持たない。`unsafe` は禁止(crate 属性とワークスペース lint の二重)
 //!
-//! 公開窓口(`WasmProgram` / `WasmRun`)は後続のタスクで追加する。
+//! 公開窓口は `WasmProgram`(`compile` / `run`)と `WasmRun`(観測値)。
 
 #![forbid(unsafe_code)]
 
@@ -32,6 +32,7 @@ mod program;
 mod runtime;
 
 pub use error::{CompileError, PolicyViolation, RunError};
+pub use program::{WasmProgram, WasmRun};
 
 #[cfg(test)]
 mod tests {
