@@ -8,6 +8,7 @@ import { DebuggerPage } from "../pages/DebuggerPage.ts";
 import { appBinaryPath, APP_ORIGIN, userDataRoot } from "./paths.ts";
 import { IPC_OBSERVATION_MODE, observeIpc, type IpcObserver } from "./appProbes.ts";
 import { AppLaunchError, launchApp, readyWithinMsFromEnv, type LaunchedApp } from "./appProcess.ts";
+import { isNotReadyLaunchError, recordLaunchGate, skipReasonFromRecord, webviewLaunchGateStore } from "./launchGate.ts";
 import { hostCallRefusal, shouldCollectFailureMaterials } from "./fixtureFailure.ts";
 import { bindWindowsHost, type BoundWindowsHost } from "./windowsHost.ts";
 
@@ -94,6 +95,14 @@ export const test = base.extend<WebviewFixtures, { browser: Browser }>({
   ],
 
   app: async ({}, use, testInfo) => {
+    // 同じ実行で、最初のシナリオが CDP の口の未応答(notReady)で失敗していたら、起動を試みずに理由つきでスキップする(早期確定)。
+    // 記録は実行の開始時に setup が消すため、前の実行の記録では誤ってスキップされない
+    const gate = webviewLaunchGateStore(os.tmpdir());
+    const skipReason = skipReasonFromRecord(gate.read());
+    if (skipReason !== null) {
+      test.skip(true, skipReason);
+    }
+
     const readyWithinMs = readyWithinMsFromEnv(process.env);
     let launched: LaunchedApp;
     try {
@@ -105,6 +114,10 @@ export const test = base.extend<WebviewFixtures, { browser: Browser }>({
     } catch (error) {
       if (error instanceof AppLaunchError) {
         await testInfo.attach("app-output", { body: error.outputTail, contentType: "text/plain" });
+      }
+      // notReady なら記録し、後続のシナリオを起動せずにスキップさせる(記録に失敗しても、テストの結果は変えない)
+      if (isNotReadyLaunchError(error) && !recordLaunchGate(gate, error, new Date().toISOString())) {
+        warn(testInfo, "CDP の口の未応答を記録できませんでした。後続のシナリオは起動を試みます");
       }
       throw error;
     }
