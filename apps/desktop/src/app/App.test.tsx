@@ -4,15 +4,28 @@ import { useWorkspace, workspaceStore } from "../state/workspace";
 import { App } from "./App";
 import { screens, type ScreenDefinition } from "./screens";
 
-describe("画面レジストリ(要件 1.1・12.14)", () => {
-  it("既定の登録はデバッガ画面の 1 件だけ", () => {
-    expect(screens.map((screen) => screen.id)).toEqual(["debugger"]);
+describe("画面レジストリ(要件 1.1・12.14・10.1)", () => {
+  it("既定の登録はデバッガ画面と比較画面の 2 件で、比較は「比較」の名前で登録される", () => {
+    expect(screens.map((entry) => [entry.id, entry.title])).toEqual([
+      ["debugger", "デバッガ"],
+      ["comparison", "比較"],
+    ]);
+  });
+
+  it("比較タブを選ぶと比較画面を表示し、デバッガ画面へ戻っても操作が残る", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "比較" }));
+
+    expect(screen.getByRole("heading", { name: "比較" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "デバッガ" }));
+    expect(screen.getByRole("toolbar", { name: "操作" })).toBeTruthy();
   });
 });
 
 describe("App シェル", () => {
   it("画面が 1 つの間はタブを出さず、デバッガ画面を表示する", () => {
-    render(<App />);
+    render(<App screens={[screens[0]!]} />);
 
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByRole("toolbar", { name: "操作" })).toBeTruthy();

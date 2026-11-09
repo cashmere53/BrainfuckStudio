@@ -1,0 +1,15 @@
+/* 解析エラーの表示(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.parse-error-notice {
+  padding: 8px 12px;
+  border: 2px solid var(--color-fg);
+  border-radius: 6px;
+}
+
+.parse-error-notice p {
+  margin: 2px 0;
+}
+
+.parse-error-notice-heading {
+  font-weight: 700;
+}
