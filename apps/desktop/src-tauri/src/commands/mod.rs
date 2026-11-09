@@ -5,6 +5,7 @@
 //! 権限生成側の一覧 `names::COMMAND_NAMES` とは tests/commands.rs で集合の一致を検査する。
 //! 一覧の各項目は `モジュール::関数名` の形で書く(例: `files::new_document`)。
 
+pub mod comparison;
 pub mod debugger;
 pub mod files;
 pub mod names;
@@ -38,4 +39,6 @@ register_commands!(
     files::save_source_file,
     files::set_document_dirty,
     files::confirm_exit,
+    comparison::get_comparison_info,
+    comparison::run_comparison,
 );

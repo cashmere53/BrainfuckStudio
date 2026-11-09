@@ -20,4 +20,6 @@ pub const COMMAND_NAMES: &[&str] = &[
     "save_source_file",
     "set_document_dirty",
     "confirm_exit",
+    "get_comparison_info",
+    "run_comparison",
 ];

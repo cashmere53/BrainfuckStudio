@@ -4,8 +4,9 @@
 //! パスは Rust 側にのみ保持し、WebView へは表示名のみを返す(要求 2.11、13.4)。
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use brainfuck_compare_api::ComparisonService;
 use brainfuck_gui_api::service::DebuggerService;
 use brainfuck_gui_api::source_file::LineEnding;
 
@@ -62,4 +63,6 @@ pub struct AppState {
     pub service: DebuggerService,
     /// 文書の状態。
     pub document: Mutex<DocumentState>,
+    /// 比較のサービス(`Send + Sync`)。デバッガのサービスとは共有せず、状態も持たない。
+    pub comparison: Arc<ComparisonService>,
 }
