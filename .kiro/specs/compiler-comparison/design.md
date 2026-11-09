@@ -770,7 +770,8 @@ interface ComparisonBackend {
 type Selection = { optimized: boolean; wasm: boolean; repetitions: number };
 type InvalidReason =
   | { kind: "unlimited" } | { kind: "invalidLimit" } | { kind: "limitTooLarge"; max: number }
-  | { kind: "invalidInput" } | { kind: "sourceTooLarge" } | { kind: "inputTooLarge" };
+  | { kind: "invalidInput" } | { kind: "sourceTooLarge" } | { kind: "inputTooLarge" }
+  | { kind: "invalidRepetitions"; max: number };
 function deriveRequest(ws: WorkspaceValues, sel: Selection, info: ComparisonInfoDto):
   { ok: true; request: RunComparisonRequest } | { ok: false; reason: InvalidReason };
 ```
