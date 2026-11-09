@@ -7,3 +7,6 @@
 #![forbid(unsafe_code)]
 
 pub mod dto;
+pub mod service;
+
+pub use service::ComparisonService;
