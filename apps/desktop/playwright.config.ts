@@ -4,6 +4,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { assertPrerequisites } from "./e2e/support/prerequisites.ts";
 import { e2ePort } from "./e2e/support/paths.ts";
+import { webviewProjects } from "./e2e/support/webview/projects.ts";
 
 // `E2E_SKIP_PREREQ=1` のときは確認を省く(--list・show-report・エディタ拡張・下流の webview 用)
 assertPrerequisites(process.env);
@@ -29,6 +30,8 @@ export default defineConfig({
       grep: /@perf/,
       use: { ...devices["Desktop Chrome"], viewport: VIEWPORT },
     },
+    // webview(実アプリ・WebView2)は `E2E_WEBVIEW=1` のときだけ追加される(本 spec の 1.3)
+    ...webviewProjects(process.env),
   ],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,

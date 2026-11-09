@@ -7,6 +7,7 @@
   - Tauri 2 の実行ファイルは、Tauri CLI を通さずに `cargo build` すると開発モード(`devUrl` の `http://localhost:1420` を読む)になる。配布と同じ組み込みの画面と CSP で動かすには、`tauri build --debug --no-bundle`(`beforeBuildCommand` の `npm run build` を実行し、画面を実行ファイルへ組み込む debug ビルド)を使う
   - 閉じる要求は、OS のメッセージ `WM_SYSCOMMAND`/`SC_CLOSE` を実ウィンドウへ送れば、タイトルバーの × と同じ経路(`DefWindowProc` → `WM_CLOSE` → tao の `CloseRequested` → `window.rs` の `on_window_event`)を通る。製品にテスト専用のコマンドを足さずに済む
   - Playwright の WebView2 ガイドどおり、起動プロセスの環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` と `WEBVIEW2_USER_DATA_FOLDER` で、テストが起動したプロセスだけに CDP の口を開き、利用者データを分けられる。`tauri.conf.json` は変更しない
+  - 実アプリ(Tauri 2.12)の IPC は、製品の CSP が `fetch` 方式(`http://ipc.localhost/<cmd>`)を拒否するため postMessage(`window.chrome.webview.postMessage`)で流れ、ネットワーク要求にならない。IPC の観測は、ページ内で `chrome.webview.postMessage`(要求)と `__TAURI_INTERNALS__.callbacks` の `get`(Rust からの応答)を記録する方式に確定した(2.3 の実アプリでの確認)
 
 ## Research Log
 
@@ -44,13 +45,17 @@
 
 ### 閉じる要求の前提(未保存の旗の伝達)と、重ねた要求の到達
 - **Context**: フロントは編集で `set_document_dirty` を非同期に呼ぶ。Rust 側の旗が立つ前に閉じる要求が届くと、確認なしで閉じる
-- **Sources Consulted**: `src/ipc/backend.ts`(`invokeCommand`)、Tauri 2 の Windows の IPC(`http://ipc.localhost/<コマンド名>` へのカスタムプロトコルの要求。`tests/commands.rs` の `InvokeRequest` の URL と同系)、`window.rs`(`close-requested` の送出)
+- **Sources Consulted**: `src/ipc/backend.ts`(`invokeCommand`)、Tauri 2 の Windows の IPC(`http://ipc.localhost/<コマンド名>` へのカスタムプロトコルの要求。`tests/commands.rs` の `InvokeRequest` の URL と同系)、Tauri 2.12 の `scripts/ipc-protocol.js`(`customProtocolIpcFailed` による postMessage への切り替え)と `tauri/src/ipc/format_callback.rs`(応答の `runCallback` の `eval`)、wry の `window.ipc`、`tauri.conf.json` の `app.security.csp`、`window.rs`(`close-requested` の送出)、実アプリ(WebView2)に CDP で接続した Playwright での実測(2.3)
 - **Findings**:
-  - IPC の要求は WebView2 のネットワーク要求として CDP から観測できる見込みだが、カスタムプロトコル(`http://ipc.localhost/...`)の要求が Playwright の `request` / `requestfinished` に現れることは未検証。`set_document_dirty` の応答を観測してから閉じる要求を送れば、伝達の遅れを判定に混ぜない
-  - 切り替え先: `@tauri-apps/api` の `invoke` は呼び出しのたびに `window.__TAURI_INTERNALS__.invoke` を引く。接続後に `page.evaluate` でこれを包めば、以後の呼び出しと完了を製品の変更なしにページ内で記録できる(包む前の呼び出しは記録されない)
-  - 起動時の IPC は `plugin:event|listen` だけで、CDP の接続より前に終わる。`load_source` は Run の開始の流れ(`src/state/runController.ts`)からだけ、`set_document_dirty` は未保存の旗が変わったときだけ(`src/app/documentFlow.ts`)呼ばれる。観測の確認は接続後の編集と Run の後で行う
+  - 設計時の見込み(IPC の要求は WebView2 のネットワーク要求として CDP から観測できる)は、実アプリで成り立たなかった。製品の CSP(`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`。`connect-src` は未指定で `default-src` に落ちる)が Tauri 2.12 の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否する(実測: ページ内の `fetch("http://ipc.localhost/__probe__")` が `TypeError: Failed to fetch`、`securitypolicyviolation` の `effectiveDirective` は `connect-src`)。Tauri は `scripts/ipc-protocol.js` の仕組みで `window.ipc.postMessage`(wry の `window.ipc = Object.freeze({ postMessage: s => window.chrome.webview.postMessage(s) })`)へ自動で切り替える(`console.warn('IPC custom protocol failed, Tauri will now use the postMessage interface instead')`)。そのため IPC は最初からネットワーク要求にならず、CDP の Network・Fetch ドメインにも `page.on("request")` にも何も出ない(実測: すべて 0 件)
+  - 要求は `chrome.webview.postMessage` に JSON 文字列(`{"cmd":"set_document_dirty","callback":<id>,"error":<id>,"options":{"customProtocolIpcBlocked":true},"payload":{"args":{"dirty":true}},...}`)で渡る。応答は Rust がコマンドの処理を終えてから `webview.eval("window.__TAURI_INTERNALS__.runCallback(id, data)")` で返す(`tauri/src/ipc/format_callback.rs`)。`runCallback` は `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)から id で関数を引く
+  - `__TAURI_INTERNALS__` の `invoke`・`ipc`・`postMessage`・`runCallback`・`callbacks` は `Object.defineProperty` に `value` だけを渡して定義され、`writable: false`・`configurable: false` のため包めない(設計時の切り替え先 `invoke` の包み込みも不成立)。一方、`window.fetch` と `window.chrome.webview.postMessage` は書き換え可能で、`callbacks` の Map のインスタンスの `get` は置き換えられる
+  - 採用した方式(postMessage の方式。実アプリで動作確認済み): 接続後に `page.evaluate` で設置する(リロード不要)。要求は `chrome.webview.postMessage` を包んで JSON から `cmd`・`callback`・`error` を取り、ページ内の記録に `{ id, cmd, done: 0 }` を足す。完了は `callbacks` に自前の `get` を置き、`runCallback` が記録済みの callback または error の id を引いた時点で `done = ++seq` と成否を記録する(`done` は「Rust 側の処理が終わって応答が返った」ことを意味する)。念のため `window.fetch` の `ipc.localhost` 宛ても記録する(CSP が変わったときの保険)。`armResponse(cmd)` は確定時点の連番を `armedAt` として取り、`entries.some(e => e.cmd === cmd && e.done > armedAt)` を `waitForFunction` で待つ(回数でなく単調な連番で比べるので、確定前の完了を拾わない)。設置の時点で `callbacks instanceof Map` と `chrome.webview.postMessage` があることを確かめ、なければ理由つきで失敗させる
+  - 実測(参照実装は実験のスクリプトの `installIpcRecorder`・`armResponse`): 1 文字の編集で `set_document_dirty` が要求→完了(74〜77 ms)。Run で `load_source`→`start_session`→`run_batch` が順に要求→完了(出力 `Hello World!\\n`)。確定前の完了は拾わない。`set_document_dirty` の応答を観測してから閉じる要求を送れば、伝達の遅れを判定に混ぜない
+  - 製品の副次的な事実(記録のみ): 実アプリは毎回の起動時に `fetch` 方式の IPC が CSP で拒否され、上記の `console.warn` を出して postMessage に切り替わっている。機能には影響しない。製品の CSP に `connect-src 'self' ipc: http://ipc.localhost` を足せば Tauri が想定する `fetch` 方式になるが、製品の変更で本 feature の非目標のため推奨しない(仮に変えると、観測は `window.fetch` の記録に頼ることになる)
+  - 起動時の IPC は `plugin:event|listen` だけで、CDP の接続より前に終わる(接続より前の IPC は記録器の設置前なので観測できないが、観測の対象にしない)。`load_source` は Run の開始の流れ(`src/state/runController.ts`)からだけ、`set_document_dirty` は未保存の旗が変わったときだけ(`src/app/documentFlow.ts`)呼ばれる。観測の確認は接続後の編集と Run の後で行う
   - 重ねた閉じる要求(11.5)は、画面に届いたかを外から確かめないと「二重に出ない」の検証が空振りする。ページ内で `close-requested` の購読をもう 1 つ足し(Tauri の内部 API `__TAURI_INTERNALS__` の `plugin:event|listen`。権限は既存の `core:event:default`)、受信回数を数える
-- **Implications**: IPC の観測と閉じる要求の受信の計数を補助として持つ。IPC の観測はネットワーク要求の方式を既定とし、`invoke` の包み込みを最初から切り替え先として設計に置く。どちらを使うかは 2.3 で接続後の編集での `set_document_dirty` の観測によって確定し、結果をこの文書に記録する。どちらも Tauri の内部の形に依存するため、Tauri の更新を Revalidation Trigger にする。どちらの方式でも観測できない場合はスモーク 3.1 の IPC の検証と 11.x の同期が失敗として表に出る(偽の合格にはならない)
+- **Implications**: IPC の観測と閉じる要求の受信の計数を補助として持つ。IPC の観測は postMessage の方式に確定し(2.3 の判断の結果)、設計時に置いた `network`(ネットワーク要求の購読)と `invoke`(`__TAURI_INTERNALS__.invoke` の包み込み)の 2 方式は、上記の根拠により実アプリで不成立のため廃止する。採用した方式は Tauri の内部の形(`callbacks`・`runCallback`・`chrome.webview.postMessage`・`customProtocolIpcFailed` による切り替え)と製品の CSP の `connect-src` に依存するため、これらを Revalidation Trigger にする。観測できない場合は設置時の理由つきの失敗、またはスモーク 3.1 の IPC の検証と 11.x の同期の失敗として表に出る(偽の合格にはならない)
 
 ### リロードと右クリックの検証の入力経路
 - **Context**: 11.6・11.7。ブラウザのスイートは `defaultPrevented` で検証しており、実際のリロードとメニューは本 spec に残された
@@ -124,6 +129,17 @@
 - **Rationale**: ブラウザのスイートの `e2e:run`(全プロジェクト)と `e2e`(chromium)の対象を変えない。npm スクリプトの環境変数の書き方がシェルに依存しない
 - **Trade-offs**: 設定ファイルに 1 行の展開を足す(ブラウザの spec が許す「プロジェクトの追加」の範囲)
 
+### Decision: IPC の観測は postMessage の方式にする(2.3 で確定)
+- **Context**: 4.2(実 IPC での実行)と 5.6(未保存の旗の伝達の確認)は、実アプリの IPC の要求と応答を観測する必要がある
+- **Alternatives Considered**:
+  1. `network`: CDP 越しのページのネットワーク要求(`http://ipc.localhost/<cmd>`)の購読(設計時の既定)
+  2. `invoke`: ページ内の `__TAURI_INTERNALS__.invoke` の包み込み(設計時の切り替え先)
+  3. postMessage: `window.chrome.webview.postMessage` の包み込み(要求)と `__TAURI_INTERNALS__.callbacks` の `get` の差し替え(応答)
+- **Selected Approach**: 3。接続後に `page.evaluate` で設置し、リロードしない。`IpcObserver` の形(`commands()`・`armResponse(cmd)`)は変えない
+- **Rationale**: 1 は製品の CSP が `fetch` 方式の IPC を拒否して postMessage に切り替わるため、IPC がネットワーク要求にならず実測で 0 件。2 は `invoke` が書き換え不可のため包めない。3 は実アプリで要求と完了(Rust の処理の終了後の `runCallback`)を観測でき、確定前の完了を拾わないことも確かめた。製品は変えない
+- **Trade-offs**: `callbacks`・`runCallback` は Tauri の内部 API で、更新で変わりうる。設置時に前提を検査して明示的に失敗させる。製品の CSP の `connect-src` が変わると `fetch` 方式になるため、`window.fetch` の `ipc.localhost` 宛ても保険として記録する
+- **Follow-up**: Tauri・wry の更新と CSP の変更で、設置時の検査と 2.3 の確認(接続後の編集での `set_document_dirty` の要求と完了)をやり直す
+
 ### Decision: 入力の経路と陽性対照
 - **Selected Approach**: リロードのキーは OS の入力(PowerShell の `AppActivate` と `SendKeys`)、右クリックは CDP のマウス入力、メニューの有無は UI Automation。11.6・11.7 と CSP にそれぞれ陽性対照を置く
 - **Rationale**: 「起きなかった」ことの検証を、入力が届くことの証明と組にする(要件 6.2、6.4、7.4)
@@ -136,7 +152,9 @@
 ## Risks & Mitigations
 - `tauri build --debug --no-bundle` の出力が想定と違う(パス・組み込みモード) — 基盤のタスクで実行して確かめ、`paths.ts` の既定を合わせる。`E2E_APP_BIN` で回避できる
 - 環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` が、文書(追加される)と違って wry の既定の追加引数(`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` など)を置き換える — 環境変数にはデバッグ口だけを入れ、通常の起動とテストの起動で WebView2 のブラウザプロセスのコマンドラインの重複を除いた実効のスイッチの集合を比べて、差が(`--user-data-dir` の値を除いて)`--remote-debugging-port` だけであることを 1.5 で確かめる。既定のメニューの表示先(`msWebOOUI`)が変わると 11.7 の前提が変わるため、差が出れば design を更新してから進める
-- IPC の要求(`http://ipc.localhost/...`)が CDP から見えない — 2.3 で接続後の編集での `set_document_dirty` の観測を確かめ、見えなければ `__TAURI_INTERNALS__.invoke` の包み込みの方式へ切り替える(design の AppProbes に定義済み)。どちらでも観測できなければ design を見直す
+- IPC の要求(`http://ipc.localhost/...`)が CDP から見えない — 実アプリで顕在化した(製品の CSP により postMessage に切り替わり、ネットワーク要求にならない。`invoke` も書き換え不可)。postMessage の方式に切り替えて解消した(上記の Decision)
+- `__TAURI_INTERNALS__.callbacks`・`runCallback`・`chrome.webview.postMessage` は Tauri・wry の内部 API で、更新で変わりうる — 記録器の設置時に `callbacks instanceof Map` と `chrome.webview.postMessage` の存在を検査し、満たさなければ理由つきで明示的に失敗させる(偽の合格や無言の待ち時間切れにしない)。Tauri・wry の更新を Revalidation Trigger にする
+- 製品の CSP の `connect-src` が変わり、IPC が `fetch` 方式に戻る — postMessage を通らなくなるため、`window.fetch` の `ipc.localhost` 宛ても保険として記録する。CSP の変更を Revalidation Trigger にする
 - CI のランナーで `SendKeys`・UI Automation・`SC_CLOSE` が効かない(対話セッションの有無) — job は非必須。陽性対照と「届けられない」場合の理由つきの失敗で、偽の合格を防ぐ
 - 開発 PC で新しい実行ファイルが Avast に止められて固まる — 起動確認の上限時間で失敗し、除外・一時停止・新しい `CARGO_TARGET_DIR`・再起動を案内する
 - 利用者データのフォルダが WebView2 の遅延した後始末で消せない — 警告の注釈にし、次の実行の setup で古いフォルダを掃除する

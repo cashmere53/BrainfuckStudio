@@ -20,7 +20,10 @@
     "e2e:prepare": "npm run build && npm run e2e:bridge && npm run e2e:shim",
     "e2e": "npm run e2e:prepare && playwright test --project=chromium",
     "e2e:perf": "npm run e2e:prepare && playwright test --project=perf",
-    "e2e:run": "playwright test"
+    "e2e:run": "playwright test",
+    "e2e:webview:prepare": "tauri build --debug --no-bundle",
+    "e2e:webview:run": "node e2e/support/webview/cli.ts",
+    "e2e:webview": "npm run e2e:webview:prepare && npm run e2e:webview:run"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

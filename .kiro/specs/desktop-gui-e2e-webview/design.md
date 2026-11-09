@@ -39,6 +39,7 @@
 
 ### Allowed Dependencies
 - 上流 `desktop-gui-e2e-browser` の公開の形: `DebuggerPage`(`e2e/support/pages/DebuggerPage.ts`)、`installDefaultActionProbe` / `readProbe` / `ProbeRecord`(`e2e/support/probes.ts`)、`expectFocusRingDrawn`(`e2e/support/visual/focusRing.ts`)、`playwright.config.ts` の `projects` 配列と `E2E_SKIP_PREREQ=1`・`E2E_PORT`、`DIST_INDEX_PATH`(`e2e/support/paths.ts`)
+- 上流 `paths.ts` の `REPO_ROOT`(`e2e/support/paths.ts`)の import: `smoke-01`・`smoke-03` が `examples/hello.bf` の読み込みに使う(webview の `paths.ts` は上流を import しないため、ランチャ `cli.ts` の制約とは別に、シナリオだけが上流の値を使う)
 - 製品のフロントから import してよいのは、ブラウザの spec と同じく `src/ipc/backend.ts` の定数(`CLOSE_REQUESTED_EVENT`)だけ
 - Node(devDependencies): 既存の `@playwright/test`(~1.65、ブラウザの spec が追加)と `@tauri-apps/cli`(既存)。新しい npm 依存は追加しない
 - OS: Windows 11、WebView2 Evergreen、`powershell.exe`(Windows PowerShell 5.1。`WScript.Shell`、`System.Windows.Forms`、`UIAutomationClient`、`user32` の P/Invoke)、`taskkill.exe`
@@ -49,7 +50,8 @@
 - 上流の `DebuggerPage`・`probes.ts`・`focusRing.ts` の公開の形、`playwright.config.ts` の `projects`・`webServer`・`E2E_SKIP_PREREQ` の扱いの変更 → 本 spec のフィクスチャとシナリオを見直す
 - `tauri.conf.json` の `build`(`beforeBuildCommand`・`frontendDist`)、`app.windows`(タイトル)、`app.security.csp` の変更 → 準備のコマンドと CSP・起動のシナリオを再実行する
 - `src-tauri/src/window.rs`(閉じる判定とイベント名)、`src/app/shortcuts.ts`(キー・右クリックの抑止)、確認ダイアログの文言の変更 → 11.x のシナリオを見直す
-- Tauri・wry の更新(IPC の URL `http://ipc.localhost/<cmd>`、内部 API `__TAURI_INTERNALS__` の `invoke` と `plugin:event|listen`、`@tauri-apps/api` の `invoke` が呼び出しのたびに `window.__TAURI_INTERNALS__.invoke` を引くこと、配信オリジン `http://tauri.localhost`、wry が WebView2 に渡す既定の追加引数)→ `AppProbes`(IPC の観測の方式を含む)、起動の確認、1.5 のブラウザプロセスのコマンドラインの比較を見直す
+- Tauri・wry の更新(IPC の経路: `fetch` 方式の `http://ipc.localhost/<cmd>` が拒否されたときの `customProtocolIpcFailed` による postMessage への切り替え(`scripts/ipc-protocol.js`)、wry の `window.ipc.postMessage` が `window.chrome.webview.postMessage` に渡すこと、要求の JSON の形(`cmd`・`callback`・`error`・`payload`)、Rust からの応答の `window.__TAURI_INTERNALS__.runCallback(id, data)` の `eval` と、それが引く `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)、内部 API の `plugin:event|listen`、配信オリジン `http://tauri.localhost`、wry が WebView2 に渡す既定の追加引数)→ `AppProbes`(IPC の観測の方式を含む)、起動の確認、1.5 のブラウザプロセスのコマンドラインの比較を見直す
+- 製品の CSP(`tauri.conf.json` の `app.security.csp`)の `connect-src` の変更(`ipc:`・`http://ipc.localhost` を許すと IPC が Tauri の想定する `fetch` 方式になり、`chrome.webview.postMessage` を通らなくなる)→ `AppProbes` の観測の方式(`window.fetch` の記録への切り替え)を見直す
 - 実行ファイル名(`brainfuck-studio`)・`CARGO_TARGET_DIR` の扱いの変更 → `paths.ts` を見直す
 - 本 spec の `WebviewApp` の形を変える → 下流(compiler-comparison が同じ基盤に足す場合)が再検証する
 - `src-tauri` への path 依存 crate の追加(例: compiler-comparison の `brainfuck-compare-api`)→ ワークフローの `paths` の絞り込みを見直す
@@ -104,7 +106,7 @@ graph LR
 ```
 
 **Architecture Integration**:
-- Selected pattern: 実アプリを外側から操作する黒箱の E2E。入力は CDP(DOM 操作・マウス)と OS(閉じる要求・キー)の 2 経路、観測は CDP(DOM・ネットワーク・評価)と OS(タイトル・プロセスの終了・メニュー)
+- Selected pattern: 実アプリを外側から操作する黒箱の E2E。入力は CDP(DOM 操作・マウス)と OS(閉じる要求・キー)の 2 経路、観測は CDP(DOM・評価。IPC はページ内の記録器)と OS(タイトル・プロセスの終了・メニュー)
 - 境界: Node のテストプロセス / 実アプリのプロセスツリー(アプリ + WebView2)/ PowerShell の補助プロセス。シナリオごとに実アプリを起動し、状態を共有しない
 - 既存のパターンの維持: ブラウザのスイートのページオブジェクト・補助・設定の規約(`@perf` の分離、`expect` の自動リトライ、固定の待ち時間を使わない、失敗時の調査材料、`fixme` と注釈による製品の不具合の記録)
 - Steering compliance: 製品の `unsafe` 禁止に影響しない(Rust のコードを追加しない)、Markdown は日本語
@@ -135,9 +137,11 @@ apps/desktop/
 │   │   ├── appProbes.ts                 # IPC の観測、close-requested の計数、ナビゲーションの目印、抑止の無効化(陽性対照)
 │   │   ├── cspProbe.ts                  # 違反の記録と、外部オリジンの受け口(127.0.0.1 の HTTP サーバ)
 │   │   ├── fixtures.ts                  # `app` フィクスチャ(起動・接続・ページの特定・失敗時の添付・終了)
+│   │   ├── fixtureFailure.ts            # 失敗の材料を残すかの判定と、アプリ終了後に OS の窓口を呼ばない判定(純粋関数)
+│   │   ├── userDataCleanup.ts           # 古い一時フォルダ(scenario-<uuid>)の掃除の対象の選択(純粋関数。削除の I/O は呼び出し側)
 │   │   ├── projects.ts                  # opt-in のプロジェクト定義(E2E_WEBVIEW=1 のときだけ返す)
 │   │   ├── cli.ts                       # ランチャ: 環境変数を付けて Playwright を webview のプロジェクトで起動
-│   │   └── *.test.ts                    # paths / prerequisites / windowsHost / appProcess / appProbes / cspProbe / projects / cli の単体テスト
+│   │   └── *.test.ts                    # paths / prerequisites / windowsHost / appProcess / appProbes / cspProbe / projects / cli / fixtureFailure / userDataCleanup の単体テスト
 │   └── webview/                         # webview のシナリオ(webview プロジェクトの testDir)
 │       ├── prerequisites.setup.ts       # setup プロジェクト: 準備物の確認、WebView2 の版の記録、古い一時フォルダの掃除
 │       ├── smoke-01-startup.webview.spec.ts
@@ -226,7 +230,7 @@ sequenceDiagram
     end
 ```
 
-- 未保存の旗の伝達(5.6): 編集の前に `set_document_dirty` の応答の待ち受けを始め、応答を観測してから閉じる要求を送る
+- 未保存の旗の伝達(5.6): 編集の前に `set_document_dirty` の応答の待ち受けを始め、応答を観測してから閉じる要求を送る。観測の根拠は、`chrome.webview.postMessage` に渡った `set_document_dirty` の要求と、Rust が処理を終えてから返す `runCallback` の応答(AppProbes の postMessage の方式)
 - 重ねた要求の到達(5.4): ページ内の `close-requested` の受信の計数が 2 になったことを確かめてから、確認ダイアログが 1 つであることを判定する
 
 ## Requirements Traceability
@@ -292,7 +296,7 @@ sequenceDiagram
 ```typescript
 /** 組み込みの画面の配信オリジン(Windows の Tauri 2 の既定) */
 export const APP_ORIGIN = "http://tauri.localhost";
-/** 実アプリの IPC の要求の URL の接頭辞(コマンド名がパスに入る) */
+/** Tauri の `fetch` 方式の IPC の宛先の接頭辞(コマンド名がパスに入る)。製品の CSP の下では使われず(postMessage に切り替わる)、AppProbes の保険の記録(`window.fetch` の包み込み)だけが使う */
 export const IPC_URL_PREFIX = "http://ipc.localhost/";
 export const APP_EXE_NAME = "brainfuck-studio.exe";
 /** E2E_APP_BIN > CARGO_TARGET_DIR/debug > apps/desktop/src-tauri/target/debug の順 */
@@ -357,8 +361,8 @@ export function bindWindowsHost(pid: number): BoundWindowsHost;
 | `runtime` | レジストリの EdgeUpdate の WebView2 のクライアント(`{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`)の `pv` を HKLM(WOW6432Node)・HKCU の順に読む |
 | `window` | プロセスの主ウィンドウ(表示中で所有者の無いトップレベル)のハンドルとタイトル |
 | `close` | 主ウィンドウへ `PostMessage(WM_SYSCOMMAND, SC_CLOSE, 0)`(× ボタンと同じ経路)。ウィンドウが無ければ `delivered: false` と理由 |
-| `keys` | `WScript.Shell.AppActivate(pid)` で前面化し、成功したら `System.Windows.Forms.SendKeys.SendWait(keys)`。前面化できなければ `delivered: false` と理由 |
-| `menu` | 対象プロセスと子孫のプロセス ID(`Win32_Process` の親子)を集め、UI Automation のルートの子のうち `ControlType.Menu` で、その ID に属する要素があるか |
+| `keys` | 前面化の段階(前面は `GetForegroundWindow` のプロセス ID で確かめる): (1) `WScript.Shell.AppActivate(pid)` を呼び、前面になるまで短く待つ(戻り値は判定に使わない)。(2) 前面にならなければ、最小化の復元と `AttachThreadInput` による `SetForegroundWindow`・`BringWindowToTop`(前面化の要求。キーは送らない)を行い、再び短く待つ。(3) それでも前面にならなければ何も送らず、`delivered: false` と「前面化できません(前面は X のままでした)」。(4) 前面になったら、送信の直前にも前面を確かめ、`System.Windows.Forms.SendKeys.SendWait(keys)` を送り、直後にも前面を確かめる。送信の直前・直後のどちらかで前面が変わっていれば `delivered: false`(キーが別のウィンドウへ届いた可能性を理由に含める) |
+| `menu` | 対象プロセスと子孫のプロセス ID(`Win32_Process` の親子)を集める。`EnumWindows` で列挙した可視の最上位ウィンドウのうち、主ウィンドウ以外で、所有プロセスが対象のプロセスツリー内、クラスが `Chrome_WidgetWin_*` のものの UI Automation の部分木(`FromHandle` の `FindFirst(Subtree)`)に `ControlType.Menu` があるか。UIA のルート直下には既定のメニューが現れないため、この方法を使う。結果は `menuOpen` と、検出時の診断 `menu`(ポップアップのクラスと項目の名前。無ければ `null`) |
 
 - 起動は `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script> ...`(`execFile`)。補助スクリプトのパスは固定で、利用者の入力を引数に渡さない
 - Node 側は `delivered: false` を `HostActionError` に変え、理由をテストの失敗に含める(偽の合格にしない)
@@ -408,22 +412,22 @@ export function launchApp(options: LaunchOptions): Promise<LaunchedApp>;
 #### AppProbes
 
 ```typescript
-/** IPC の URL からコマンド名を取り出す(対象外は null。純粋関数) */
-export function ipcCommandFromUrl(url: string): string | null;
-/** network: CDP 越しのページのネットワーク要求(request / requestfinished)。invoke: ページ内の __TAURI_INTERNALS__.invoke の包み込み(切り替え先) */
-export type IpcObservationMode = "network" | "invoke";
-/** フィクスチャが使う方式。2.3 の実アプリでの確認で確定する(初期値は "network") */
+/** postMessage: ページ内の chrome.webview.postMessage の包み込み(要求)と __TAURI_INTERNALS__.callbacks の get の差し替え(完了)。実アプリで確定した唯一の方式 */
+export type IpcObservationMode = "postMessage";
+/** フィクスチャが使う方式(既定は "postMessage") */
 export const IPC_OBSERVATION_MODE: IpcObservationMode;
 export interface IpcObserver {
   readonly mode: IpcObservationMode;
-  commands(): Promise<readonly string[]>;                     // 観測した要求のコマンド名(順序どおり)
-  /** 待ち受けを確定してから返る。completed は、確定以降に完了したそのコマンドの応答で解決する */
-  armResponse(command: string): Promise<{ readonly completed: Promise<void> }>;
+  commands(): Promise<readonly string[]>;                     // 設置以後に観測した要求のコマンド名(順序どおり)
+  /** 待ち受けを確定してから返る。completed は、確定以降に Rust から応答が返った(runCallback で callback または error の id が引かれた)そのコマンドで解決し、その応答の成否 ok を返す(error の応答でも解決する) */
+  armResponse(command: string): Promise<{ readonly completed: Promise<{ readonly ok: boolean }> }>;
 }
+/** 接続後に page.evaluate で記録器を設置する(リロードしない)。前提が無ければ理由つきで失敗する */
 export function observeIpc(page: Page, mode: IpcObservationMode): Promise<IpcObserver>;
-export type IpcCallLog = { calls: string[]; completed: Record<string, number> };
-/** invoke の方式の本体(page.evaluate に渡す)。internals.invoke を包み、コマンド名の呼び出しと完了を log に記録し、元の結果・例外はそのまま返す */
-export function installInvokeRecorder(internals: { invoke: (cmd: string, ...rest: unknown[]) => Promise<unknown> }, log: IpcCallLog): void;
+/** ページ内の記録の 1 件。done は完了の単調な連番(未完了は 0) */
+export type IpcLogEntry = { id: number; cmd: string; done: number; ok: boolean | null };
+/** postMessage の方式の本体(page.evaluate に渡す。単体テストでは偽の window を渡す。公開の名前と引数の型の細部は実装に任せる)。前提を検査し、要求と完了をページ内の記録に残す。元の postMessage・callbacks の get の結果は変えない */
+export function installIpcRecorder(win: IpcRecorderTarget): void;
 
 export interface CloseEventCounter { count(): Promise<number> }
 /** ページ内で close-requested をもう 1 つ購読し、受信回数を数える(__TAURI_INTERNALS__ の plugin:event|listen) */
@@ -439,10 +443,15 @@ export function bypassAppSuppression(page: Page, kinds: readonly ("keydown" | "c
 - イベント名は `src/ipc/backend.ts` の `CLOSE_REQUESTED_EVENT` を使う
 - `armResponse` は「await で待ち受けを確定し、操作し、その後 `completed` を await する」順で使う(5.6)
 - 起動時の IPC は `plugin:event|listen` だけで、CDP の接続より前に終わる。`load_source` は Run の開始の流れ(`runController`)からだけ、`set_document_dirty` は未保存の旗が変わったときだけ呼ばれる。そのため観測の確認は「接続後の編集」(`set_document_dirty`)と「Run の後」(`load_source`・`start_session`・`run_batch`)で行い、起動時の要求は観測の対象にしない
-- IPC の観測の 2 つの方式(シナリオは `IpcObserver` だけに依存し、方式を知らない):
-  - `network`(初期値): `page` の `request` / `requestfinished` を購読し、URL が `IPC_URL_PREFIX` で始まる要求から `ipcCommandFromUrl` でコマンド名を取る。カスタムプロトコル(`http://ipc.localhost/...`)の要求が CDP 越しの Playwright のイベントに現れることは未検証で、2.3 で実アプリで確かめる
-  - `invoke`(切り替え先): 接続後に `page.evaluate` で `installInvokeRecorder` を `window.__TAURI_INTERNALS__` に適用し、呼び出しのコマンド名と完了の回数をページ内の記録に残す。`@tauri-apps/api` の `invoke` は呼び出しのたびに `window.__TAURI_INTERNALS__.invoke` を引くため、接続後に包んでも以後の呼び出しはすべて記録され、製品の変更は要らない(包む前の起動時の呼び出しは記録されないが、上記のとおり観測の対象にしない)。`armResponse` は確定の時点の完了の回数を控え、それを超えるまで `expect.poll` で待つ
-  - 切り替えの判断点: 2.3 で、接続後にエディタを編集して `network` の方式で `set_document_dirty` の要求と応答が観測できなければ、`IPC_OBSERVATION_MODE` を `invoke` にし、判断の結果を research.md に記録する。`invoke` の方式でも観測できなければ、11.x と 3.1 の IPC の検証を進めず design を見直す
+- 実アプリの IPC の経路(実測。Tauri 2.12、WebView2): 製品の CSP(`connect-src` 未指定で `default-src 'self'` に落ちる)が Tauri の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否するため、Tauri は起動時に `customProtocolIpcFailed` で postMessage の方式に切り替える(`console.warn('IPC custom protocol failed, Tauri will now use the postMessage interface instead')`)。要求は `window.ipc.postMessage`(wry の `Object.freeze({ postMessage: s => window.chrome.webview.postMessage(s) })`)に JSON 文字列(`{"cmd":"set_document_dirty","callback":<id>,"error":<id>,"options":{"customProtocolIpcBlocked":true},"payload":{...}}`)で渡り、Rust はコマンドの処理を終えてから `webview.eval("window.__TAURI_INTERNALS__.runCallback(id, data)")` で応答を返す(`tauri/src/ipc/format_callback.rs`)。IPC はネットワーク要求にならない
+- IPC の観測の方式は postMessage の方式だけとする(シナリオは `IpcObserver` だけに依存し、方式を知らない):
+  - 設置: フィクスチャが接続後に `page.evaluate` で `installIpcRecorder` を適用する。リロードしない(起動直後のアプリの状態を保つ)。設置の時点で `__TAURI_INTERNALS__.callbacks instanceof Map` と `window.chrome.webview.postMessage` が関数であることを確かめ、満たさなければ理由つきで失敗させる(Tauri の内部 API の変更を早く検出する)
+  - 要求の記録: `window.chrome.webview.postMessage`(書き換え可能)を包み、JSON から `cmd`・`callback`・`error` を取り、ページ内の記録に `{ id, cmd, done: 0 }` を足してから元の関数に同じ文字列を渡す。解析できない文字列は記録せずにそのまま渡す
+  - 完了の記録: `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)に自前の `get` を置き、`runCallback` が記録済みの callback または error の id を引いた時点で `done = ++seq` と成否(callback なら成功、error なら失敗)を記録し、元の `get` の結果を返す。Rust はコマンドの処理を終えてから `eval` するため、`done` は「Rust 側の処理が終わって応答が返った」ことを意味する。5.6 と 4.2 の確認の根拠は「postMessage の要求と、Rust からの `runCallback` の応答」になる
+  - 保険: `window.fetch`(書き換え可能)の `IPC_URL_PREFIX` 宛ての要求も同じ記録に残す(製品の CSP が変わって `fetch` 方式になった場合の検出用)
+  - `armResponse(cmd)`: 確定の時点の連番を `armedAt` として取り、`entries.some(e => e.cmd === cmd && e.done > armedAt)` を `page.waitForFunction` で待つ。回数ではなく単調な連番で比べるため、確定より前に完了した同じコマンドを拾わない。待ちが済んだら同じ条件の要求の `ok` を読み、`completed` は `{ ok }` で解決する(シナリオは `ok` が `true` であることを確かめる。エラーの応答で解決しても失敗にできる)
+  - 包めないもの: `__TAURI_INTERNALS__` の `invoke`・`ipc`・`postMessage`・`runCallback`・`callbacks` のプロパティ自体は `Object.defineProperty` に `value` だけを渡して定義され、`writable: false`・`configurable: false` のため置き換えられない(包めるのは `window.chrome.webview.postMessage`・`window.fetch` と、`callbacks` の Map のインスタンスの `get`)
+- 不成立とした方式(判断の記録。根拠と実測は research.md): `network`(CDP 越しのページのネットワーク要求 `http://ipc.localhost/<cmd>` の購読)は、上記の CSP の拒否により IPC が最初からネットワーク要求にならず、CDP の Network・Fetch ドメインにも `page.on("request")` にも 0 件だったため不成立。`invoke`(`__TAURI_INTERNALS__.invoke` の包み込み)は、プロパティが書き換え不可のため不成立。どちらも廃止し、`ipcCommandFromUrl`・`installInvokeRecorder` は持たない
 
 #### CspProbe
 
@@ -472,12 +481,12 @@ export interface WebviewApp {
   readonly page: Page;                       // CDP で得たアプリのページ(URL が APP_ORIGIN で始まる)
   readonly debuggerPage: DebuggerPage;       // 上流のページオブジェクト
   readonly host: BoundWindowsHost;           // pid に束ねた OS の窓口
-  readonly ipc: IpcObserver;                 // 接続直後から観測(方式は IPC_OBSERVATION_MODE)
+  readonly ipc: IpcObserver;                 // 接続後に設置した記録器による観測(postMessage の方式。設置でリロードしない)
 }
 export const test: TestType<PlaywrightTestArgs & PlaywrightTestOptions & { app: WebviewApp }, PlaywrightWorkerArgs & PlaywrightWorkerOptions>;
 export { expect } from "@playwright/test";
 ```
-- `app`(テスト単位): `launchApp` → `chromium.connectOverCDP(cdpEndpoint)` → 既定のコンテキストのページから `APP_ORIGIN` のページを特定(現れるまで待つ)→ `debuggerPage.editor` の表示を待つ → `observeIpc(page, IPC_OBSERVATION_MODE)` → `use` → 後始末
+- `app`(テスト単位): `launchApp` → `chromium.connectOverCDP(cdpEndpoint)` → 既定のコンテキストのページから `APP_ORIGIN` のページを特定(現れるまで待つ)→ `debuggerPage.editor` の表示を待つ → `observeIpc(page, IPC_OBSERVATION_MODE)`(接続後に `page.evaluate` で記録器を設置する。リロードしないので起動直後のアプリの状態を保つ。接続より前の起動時の IPC は観測しない)→ `use` → 後始末
 - 後始末: 失敗なら `page.screenshot` と `outputTail` を添付(1.9)、`runtimeVersion` を注釈(1.10)、CDP を切断、`terminate()`。フォルダの削除の失敗は `warning` の注釈
 - シナリオは組み込みの `page`・`context`・`browser` を使わない(使うと Chromium を起動するため)。画面の操作は `app.debuggerPage` と `app.page` だけで行う
 
@@ -520,9 +529,9 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 `smoke-11-defaults` の決め事:
 - 11.6(6.1): 編集で未保存にし、`placeNavigationMarker` と上流の `installDefaultActionProbe` を設定し、`host.sendKeys` で F5 を 10 回・`^r`・`^{F5}` を送る。プローブにそれぞれの `keydown` が `defaultPrevented: true` で記録されるのを待ってから、目印が残り遷移が 0 回で、編集内容が残ることを確かめる
 - 陽性対照(6.2): 別のテストで `bypassAppSuppression(["keydown"])` の後に `^r` を送り、目印が消える(遷移が 1 回以上)ことを `expect.poll` で確かめる
-- 11.7(6.3): 編集可能でない要素(「状態」領域)を CDP のマウスで右クリックし、プローブに `contextmenu` が `defaultPrevented: true` で記録されるのを待ってから、`host.contextMenuOpen()` が偽であることを 1 回確かめる
-- 陽性対照(6.4): 別のテストで `bypassAppSuppression(["contextmenu"])` の後に同じ右クリックをし、`expect.poll(host.contextMenuOpen)` が真になることを確かめる(後始末で Esc を送ってメニューを閉じる)
-- 11.7 の否定の判定と陽性対照は同じ手順(右クリック → 1 回の OS の確認)を使う。陽性対照が失敗した場合、11.7 の結果は信頼できないものとして扱う(6.4)
+- 11.7(6.3): 編集可能でない要素(「状態」領域)を CDP のマウスで右クリックし、プローブに `contextmenu` が `defaultPrevented: true` で記録されるのを待ってから、`host.contextMenuOpen()` が偽であることを複数回(3 回)確かめる。メニューの表示は検出時間(陽性対照で約 1.2 秒)より後に起きうるため、1 回の確認では競合で偽の合格になりうる
+- 陽性対照(6.4): 別のテストで `bypassAppSuppression(["contextmenu"])` の後に同じ右クリックをし、`expect.poll(host.contextMenuOpen)` が真になることを確かめる。後始末の Esc は `finally` で送り、検出に失敗してもメニューを閉じる
+- 11.7 の否定の判定と陽性対照は同じ右クリックの手順を使い、否定の判定は複数回の確認で行う。陽性対照が失敗した場合、11.7 の結果は信頼できないものとして扱う(6.4)
 
 `csp` の決め事(`startExternalSink` と `installCspViolationCollector` を使う):
 - インライン(7.1): `<script>` 要素に目印を立てる本文を入れて挿入 → 目印が立たない、`script-src-elem`(または `script-src`)の違反がある
@@ -564,7 +573,8 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 |---|---|---|
 | 準備物の不足 | SetupProject | 一覧と準備のコマンドで失敗 |
 | `AppLaunchError` | AppLauncher | 理由と出力の末尾で失敗、プロセスを終了 |
-| `HostActionError` | WindowsHost | 理由つきで失敗 |
+| `HostActionError` | WindowsHost | 理由つきで失敗。キー入力は前面にならなければ何も送らずに失敗する(6.5) |
+| アプリ終了後の OS の操作の呼び出し | WebviewFixtures(`hostCallRefusal`) | OS の操作を送らず、終了の状態を含む理由つきで失敗(pid の再利用による誤送信の防止) |
 | 製品の不具合 | シナリオ | `test.fixme` と注釈、README と traceability に記録 |
 | 後始末の失敗 | AppLauncher | 警告の注釈 |
 
@@ -576,7 +586,7 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 - `prerequisites.test.ts`: Windows 以外、実行ファイル・PowerShell・WebView2・`dist/` のそれぞれの欠落で(ランチャ用の判定は Windows と `dist/` だけ)、案内の文面(`npm run e2e:webview:prepare` など)が出ること、すべて揃えば空
 - `windowsHost.test.ts`: 各動作の結果の解析、`error` の行と形の違う行の拒否、`delivered: false` が `HostActionError` になること
 - `appProcess.test.ts`: `buildAppEnv` が継承した `WEBVIEW2_*` を除いて 2 つだけを設定し、追加の引数が `--remote-debugging-port=<port>` だけ(アプリの既定の引数を含まない)であること、`waitForCdpEndpoint` が応答で解決・プロセスの終了で `exitedEarly`・上限超過で `notReady`(案内の文面を含む)になること(偽の取得関数)
-- `appProbes.test.ts`: `ipcCommandFromUrl`(IPC の URL、エンコードされた名前、対象外の URL)、`installInvokeRecorder`(偽の `invoke` を包み、呼び出しの名前と完了の回数が記録され、元の結果と例外がそのまま返ること)
+- `appProbes.test.ts`: `installIpcRecorder` を偽の `window`(偽の `chrome.webview.postMessage` と、`callbacks` の Map を持つ偽の `__TAURI_INTERNALS__`)に適用し、要求の JSON から `cmd` が記録され元の `postMessage` に同じ文字列が渡ること、callback / error の id を `get` で引くと完了(連番と成否)が記録され元の `get` の結果が返ること、解析できない文字列を記録しないこと、前提(`callbacks` が Map でない、`chrome.webview` が無い)を欠くと理由つきで失敗すること、`ipc.localhost` 宛ての `fetch` が保険として記録されること。`armResponse` が確定より前に完了した同じコマンドを拾わず、確定以後の完了で解決すること(競合の防止)
 - `cspProbe.test.ts`: 受け口が要求を数え、閉じられること
 - `projects.test.ts`: `E2E_WEBVIEW` が無いと空配列、`1` なら 2 つのプロジェクトで `workers: 1`・`dependencies`・`testMatch` が設計どおり
 - `cli.test.ts`: `cli.ts` が求める `dist/index.html` のパスが上流の `DIST_INDEX_PATH` と一致すること、`buildWebviewRun` の環境変数(`E2E_WEBVIEW=1`、`E2E_SKIP_PREREQ=1`、`E2E_PORT` は指定があればそのまま・無ければ渡した空きポート)と引数(`--project=webview --workers=1` + 利用者の引数)
