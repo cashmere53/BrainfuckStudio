@@ -197,8 +197,10 @@ fn directory_as_source_exits_4_with_empty_stdout() {
 
 #[test]
 fn closed_stdout_exits_4_and_diagnostic_targets_standard_output() {
-    let hello = example_path("hello.bf");
-    let output = run_cli_closed_stdout(&[hello.as_os_str()]);
+    // 出力が止まらないソースを使う。読み側を閉じる前に書き終えると成功(終了コード 0)してしまうため、
+    // パイプの容量を超える出力で、読み側が閉じるまで子の書き込みを待たせる。
+    let source = write_temp("endless-output.bf", b"+[.]");
+    let output = run_cli_closed_stdout(&[source.as_os_str()]);
 
     assert_eq!(output.code, Some(4), "stderr: {}", stderr_text(&output));
     let stderr = stderr_text(&output);
