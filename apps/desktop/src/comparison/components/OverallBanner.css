@@ -1,0 +1,11 @@
+.overall-banner {
+  display: inline-block;
+  padding: 6px 12px;
+  border: 2px solid var(--color-fg);
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.overall-banner-symbol {
+  margin-right: 2px;
+}

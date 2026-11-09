@@ -1,0 +1,42 @@
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.result-table caption {
+  text-align: left;
+  font-weight: 700;
+  padding: 4px 0;
+}
+
+.result-table th,
+.result-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.result-table th[scope="row"] {
+  white-space: nowrap;
+}
+
+.result-table-verdict {
+  font-weight: 700;
+}
+
+.result-table-reason {
+  display: block;
+  font-weight: 400;
+  color: var(--color-muted);
+}
+
+.result-table-detail-row td {
+  background-color: var(--color-bg);
+}
+
+.result-table-detail-row summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
