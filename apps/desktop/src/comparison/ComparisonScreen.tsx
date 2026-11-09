@@ -22,13 +22,18 @@ import { formatInvalidReason } from "./domain/comparisonFormat";
 import { deriveRequest, type Selection } from "./domain/comparisonRequest";
 import { DISCLAIMER_TEXT } from "./domain/definitions";
 import { tauriComparisonBackend, type ComparisonBackend } from "./ipc";
-import { createComparisonController, isResultStale } from "./state/comparisonStore";
+import { createComparisonController, isResultStale, type ComparisonController } from "./state/comparisonStore";
 
 export interface ComparisonScreenProps {
-  /** 比較のバックエンド。既定は本物の IPC(テストでは偽バックエンドを注入する) */
+  /** 比較のバックエンド。既定は本物の IPC(テストでは偽バックエンドを注入する)。`controller` を渡すときは、その controller と同じバックエンドを渡す */
   backend?: ComparisonBackend;
   /** 共有の Workspace ストア。既定はアプリ全体のストア */
   workspace?: WorkspaceStore;
+  /**
+   * 比較の状態を持つコントローラ。画面のライフサイクルより長く保持するために、呼び出し側(レジストリ)が作って渡す。
+   * 省略時は画面が自分用に作る(テストの既定)。アンマウントは購読の解除のみで、実行中の比較は止めない。
+   */
+  controller?: ComparisonController;
 }
 
 /** 入力欄の文字列を繰り返し回数にする。10 進の数字だけを受け付け、それ以外は範囲外として扱う(要求の導出が拒否する) */
@@ -43,7 +48,8 @@ export function ComparisonScreen(props: ComparisonScreenProps = {}) {
   const reasonId = useId();
 
   const values = useWorkspace(store);
-  const controller = useMemo(() => createComparisonController({ backend, workspace: store }), [backend, store]);
+  const ownController = useMemo(() => createComparisonController({ backend, workspace: store }), [backend, store]);
+  const controller = props.controller ?? ownController;
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 
   const [info, setInfo] = useState<ComparisonInfoDto | null>(null);
