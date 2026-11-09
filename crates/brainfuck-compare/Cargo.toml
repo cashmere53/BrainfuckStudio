@@ -1,0 +1,12 @@
+[package]
+name = "brainfuck-compare"
+version = "0.1.0"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+brainfuck-core = { path = "../brainfuck-core" }
+brainfuck-optimized = { path = "../brainfuck-optimized" }
+brainfuck-wasm = { path = "../brainfuck-wasm" }

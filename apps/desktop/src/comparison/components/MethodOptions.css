@@ -1,0 +1,44 @@
+/* 比較の方式選択と繰り返し回数(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.method-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border, #888);
+  border-radius: 6px;
+}
+
+.method-options-legend {
+  padding: 0 4px;
+  font-weight: 700;
+}
+
+.method-options-note {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 0.9em;
+}
+
+.method-options-check,
+.method-options-repetitions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.method-options-repetitions-input {
+  width: 4em;
+  padding: 2px 6px;
+}
+
+.method-options input:focus-visible {
+  outline: 2px solid var(--color-focus, #1a73e8);
+  outline-offset: 2px;
+}
+
+.method-options input:disabled {
+  opacity: 0.6;
+}

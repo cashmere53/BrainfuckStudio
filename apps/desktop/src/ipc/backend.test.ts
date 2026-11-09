@@ -111,10 +111,12 @@ describe("tauriBackend: 全コマンドの呼び出し形", () => {
     ]);
   });
 
-  it("コマンド名の定数は 14 本で、関数名と一致する", () => {
-    expect(Object.values(COMMANDS)).toHaveLength(14);
+  it("コマンド名の定数は 16 本で、関数名と一致する", () => {
+    expect(Object.values(COMMANDS)).toHaveLength(16);
     expect(COMMANDS.getTapeWindow).toBe("get_tape_window");
     expect(COMMANDS.setDocumentDirty).toBe("set_document_dirty");
+    expect(COMMANDS.getComparisonInfo).toBe("get_comparison_info");
+    expect(COMMANDS.runComparison).toBe("run_comparison");
   });
 
   it("失敗は ApiError として reject する(メソッド経由でも正規化される)", async () => {

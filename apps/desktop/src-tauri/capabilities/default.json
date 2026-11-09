@@ -18,6 +18,8 @@
     "allow-open-source-file",
     "allow-save-source-file",
     "allow-set-document-dirty",
-    "allow-confirm-exit"
+    "allow-confirm-exit",
+    "allow-get-comparison-info",
+    "allow-run-comparison"
   ]
 }

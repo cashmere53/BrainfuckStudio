@@ -167,7 +167,13 @@ fn every_registered_command_is_reachable_over_ipc() {
     // 引数を取らないコマンドは空の要求でも受理される。そのうち `open_source_file`(ネイティブのダイアログを開く)と
     // `confirm_exit`(アプリを終了する)は呼ぶと副作用が起きるため、この検査からは外す。
     // `new_document` は副作用が無く成功するだけなので外す。登録は集合の一致テストで検査する。
-    const NO_ARGS_COMMANDS: &[&str] = &["new_document", "open_source_file", "confirm_exit"];
+    // `get_comparison_info` は引数を取らない定数の取得で、空の要求でも成功する。
+    const NO_ARGS_COMMANDS: &[&str] = &[
+        "new_document",
+        "open_source_file",
+        "confirm_exit",
+        "get_comparison_info",
+    ];
     for name in REGISTERED_COMMANDS
         .iter()
         .filter(|name| !NO_ARGS_COMMANDS.contains(name))

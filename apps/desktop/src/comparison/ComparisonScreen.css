@@ -1,0 +1,72 @@
+/* 比較画面のレイアウト(このコンポーネント自身のモジュールに置く。global.css は変更しない) */
+
+.comparison-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  max-width: 1100px;
+}
+
+.comparison-heading {
+  margin: 0;
+  font-size: 1.4em;
+}
+
+.comparison-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comparison-limit-note {
+  margin: 0;
+  font-size: 0.9em;
+}
+
+.comparison-run {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.comparison-run-button {
+  padding: 6px 14px;
+  font-weight: 700;
+}
+
+.comparison-run-button:disabled {
+  opacity: 0.6;
+}
+
+.comparison-run-button:focus-visible {
+  outline: 2px solid var(--color-focus, #1a73e8);
+  outline-offset: 2px;
+}
+
+.comparison-run-reason,
+.comparison-stale {
+  margin: 0;
+}
+
+.comparison-alert {
+  margin: 0;
+  padding: 8px 12px;
+  border: 2px solid var(--color-fg);
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.comparison-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.comparison-disclaimer {
+  margin: 0;
+  font-size: 0.9em;
+}

@@ -3,7 +3,8 @@
 // フォーカスした Run・Pause・Step・Reset が Enter と Space で動くこと(9.6)。
 // 操作ボタンは状態で有効が変わる: 未開始・一時停止では Run・Step・Reset が有効、実行中は Pause だけが有効。
 // そのため Pause と Reset が同時に有効になる状態は無く、Pause は実行中、Reset は一時停止の状態で確かめる。
-// 期待する順序は画面の操作の並び(ツールバー、ソース、入力、命令数上限、テープ、出力)を明示する。
+// 期待する順序は画面の操作の並び(画面切替のタブ、ツールバー、ソース、入力、命令数上限、テープ、出力)を明示する。
+// 画面切替のタブ(デバッガ・比較)は画面が 2 つ以上のときアプリシェルが出す role=tab のボタンで、Tab の順序の先頭に入る。
 // 視覚的な順序は、各要素の画面上の位置(上から下、同じ行の中では左から右)と照らし合わせる。
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures.ts";
@@ -18,8 +19,16 @@ type Box = { readonly x: number; readonly y: number; readonly width: number; rea
 /** 操作の状態。未開始(初期)・実行中・一時停止 */
 type State = "initial" | "running" | "paused";
 
+/** アプリシェルの画面切替のタブの名前(画面レジストリの登録順。screens.ts の id/title と対応する) */
+const SCREEN_TABS = ["デバッガ", "比較"] as const;
+
+/** 画面切替のタブ(role=tab。画面が 2 つ以上のときだけ描画される) */
+function screenTab(page: Page, name: (typeof SCREEN_TABS)[number]): Locator {
+  return page.getByRole("tab", { name, exact: true });
+}
+
 /**
- * 状態ごとに Tab で止まる要素の期待する順序(無効の要素は止まらない)。
+ * 状態ごとに Tab で止まる要素の期待する順序(無効の要素は止まらない)。先頭は画面切替のタブ 2 つ。
  * 未開始: Run・Step が有効、編集の操作は全部有効。
  * 一時停止: Run・Step・Reset と編集の操作が有効。上限なしを入れた状態のため命令数上限の入力欄は無効。
  * 実行中: Pause だけが操作ボタンで有効。編集の操作は全部無効で、表示半径・テープ・出力の表示形式だけが止まる。
@@ -32,6 +41,8 @@ function expectedStops(page: Page, debuggerPage: DebuggerPage, state: State): St
     return { name, target: locator, ring: locator };
   };
   const self = (name: string, locator: Locator): Stop => ({ name, target: locator, ring: locator });
+  // 画面切替のタブ(アプリシェルが画面を 2 つ以上登録したときだけ出す。ツールバーより上で、Tab の順序の先頭)
+  const screenTabs: Stop[] = SCREEN_TABS.map((name) => self(`画面のタブ「${name}」`, screenTab(page, name)));
   const controls: Stop[] =
     state === "initial"
       ? [toolbar("Run"), toolbar("Step")]
@@ -59,6 +70,7 @@ function expectedStops(page: Page, debuggerPage: DebuggerPage, state: State): St
         ? [self("上限なし", debuggerPage.unlimited)]
         : [self("命令数上限", debuggerPage.stepLimit), self("上限なし", debuggerPage.unlimited)];
   return [
+    ...screenTabs,
     ...controls,
     ...editing,
     ...limits,
@@ -293,14 +305,14 @@ test.describe("スモーク 13: 操作ボタンの Enter と Space", () => {
   });
 
   test("9.6 Tab で操作ボタンに到達し、Enter で動く(実行中の Pause と一時停止の Reset)", async ({ page, debuggerPage }) => {
-    // 実行中は Pause だけが有効なので、文書の先頭から Tab を押すと Pause に到達する(Run・Step は無効で止まらない)
+    // 実行中は Pause だけが有効なので、文書の先頭から Tab を押すと、画面切替のタブ 2 つを越えて Pause に到達する
+    // (Run・Step は無効で止まらない)。始点は文書の先頭へ戻してから確かめる
     await startRunning(page, debuggerPage);
-    await page.evaluate(() => {
-      const active = document.activeElement;
-      if (active instanceof HTMLElement) {
-        active.blur();
-      }
-    });
+    await blurActive(page);
+    for (const name of SCREEN_TABS) {
+      await page.keyboard.press("Tab");
+      await expect(screenTab(page, name), `Tab で画面のタブ「${name}」に到達する`).toBeFocused();
+    }
     await page.keyboard.press("Tab");
     await expect(debuggerPage.button("Pause"), "実行中は Tab で Pause に到達する").toBeFocused();
     await page.keyboard.press("Enter");

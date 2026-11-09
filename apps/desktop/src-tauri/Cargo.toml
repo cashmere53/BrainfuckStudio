@@ -25,6 +25,8 @@ tauri-build = "2.7"
 [dependencies]
 # API クレート(Tauri 非依存の DTO・サービス)。`brainfuck-core` へは直接依存しない。
 brainfuck-gui-api = { path = "../../../crates/brainfuck-gui-api" }
+# 比較用の API クレート(比較の DTO・`ComparisonService`)。デバッガ API とは別クレートに置く。
+brainfuck-compare-api = { path = "../../../crates/brainfuck-compare-api" }
 tauri = "2.12"
 # ダイアログ用プラグインは Rust 側にのみ登録する。WebView への権限は capabilities で与えない。
 tauri-plugin-dialog = "2.8"
