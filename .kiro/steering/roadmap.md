@@ -45,7 +45,7 @@ Phase 2 の完了後、仕様書の外側として品質基盤の 2 spec(desktop
 - [x] desktop-gui-e2e-webview -- 品質基盤: 実 Tauri アプリ(WebView2、Windows 限定)に CDP(`connectOverCDP`)で接続し、起動・Hello World・Pause と再開・閉じる確認・WebView2 の既定動作の抑止・CSP の実効を少数のシナリオで検証する。実験的で、CI では初期は非必須。Dependencies: desktop-gui-e2e-browser, desktop-gui
 
 ## Direct Implementation Candidates
-- [x] ci-baseline -- GitHub Actions の基本ワークフロー(`cargo fmt --check`、`cargo clippy --workspace --all-targets -D warnings`、`cargo test --workspace`、`apps/desktop` の typecheck / lint / test / build)。現在ワークフローは存在しない。spec を要するほどの設計判断が無いため直接実装する。E2E の 2 spec はそれぞれ独立したワークフローファイル(`e2e-browser.yml` / `e2e-webview.yml`)に自分の job を置き、ci-baseline のワークフローは変更しない。ci-baseline と E2E の 2 spec の間に順序の依存は無い
+- [x] ci-baseline -- GitHub Actions の基本ワークフロー(`cargo fmt --check`、`cargo clippy --workspace --all-targets -D warnings`、`cargo test --workspace`、`apps/desktop` の typecheck / lint / test / build)。spec を要するほどの設計判断が無いため直接実装する。E2E の 2 spec はそれぞれ独立したワークフローファイル(`e2e-browser.yml` / `e2e-webview.yml`)に自分の job を置き、ci-baseline のワークフローは変更しない。ci-baseline と E2E の 2 spec の間に順序の依存は無い
 
 ## Notes
 - E2E の 2 spec の境界: browser は「画面と IPC 契約の検証(Linux で動く)」、webview は「実配布形でしか起きないこと(Windows 限定)」。重複するシナリオは browser に置き、webview は少数に絞る。ネイティブダイアログ(開く・保存)はどちらでも自動化できず、browser では中継が返すパスで代替し、webview では対象外とする。3.2 の CLI との比較は Rust の parity テストが担う。NVDA の読み上げは手動のまま
