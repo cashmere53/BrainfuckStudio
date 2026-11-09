@@ -22,6 +22,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "brainfuck-compare"
+version = "0.1.0"
+dependencies = [
+ "brainfuck-core",
+ "brainfuck-optimized",
+ "brainfuck-wasm",
+]
+
+[[package]]
 name = "brainfuck-core"
 version = "0.1.0"
 
