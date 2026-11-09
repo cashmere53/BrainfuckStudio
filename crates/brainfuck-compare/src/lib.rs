@@ -18,11 +18,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod compare;
 pub mod limits;
 pub mod methods;
 mod observation;
 mod report;
 
+pub use compare::{CompareError, ComparisonRequest};
 pub use observation::{Field, Observation};
 pub use report::{
     Comparison, FailureKind, Method, MethodReport, Metrics, Outcome, Overall, Units,
