@@ -5,3 +5,5 @@
 //! `brainfuck-gui-api` は本クレートに依存しない。
 
 #![forbid(unsafe_code)]
+
+pub mod dto;
