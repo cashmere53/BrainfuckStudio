@@ -1,11 +1,16 @@
 //! コード生成(`OptimizedProgram` → WASM バイト列)。
 //!
-//! 2.3 の範囲: 直線的な操作(`Add` / `Move` / `Output` / `Input`)を生成する。
-//! 直線的でない操作と未知の操作種別は「常に離脱」として生成し、後続のタスクが種別ごとに置き換える。
+//! 2.6 の範囲: 直線的な操作(`Add` / `Move` / `Output` / `Input`)と一般ループ(`LoopStart` / `LoopEnd`)を生成する。
+//! クリア・移動ループ・走査(`Clear` / `Transfer` / `Scan`)と未知の操作種別は「常に離脱」として生成し、
+//! 後続のタスク(2.7・2.8)が種別ごとに置き換える。
 //!
 //! 生成規則: 各操作の前に `pc` へ操作の先頭の命令添字を書き、検査(コスト・到達範囲)が
 //! 成立しなければ `br` で離脱先へ分岐する。検査はすべて状態を変更する前に行う。
 //! 検査が成立すれば状態を変更し、実行数へ素朴換算コストを加算する。
+//!
+//! 一般ループは `block { [検査 ・ loop { 本体 ・ ]検査 } }` で表す。`[` の検査は `block` の内側で入る時に 1 回だけ行い、
+//! `block` の末尾が 0 セルの脱出先。`loop` の先頭は `[` の次(本体の直前)で、`]` が非 0 のとき戻る。
+//! 離脱先の `br` の深さは、外側の離脱先ブロックから数えた開いている枠の数(`Nesting::frames`)で決める。
 
 #![allow(dead_code)] // 公開窓口(2.4)から呼ばれるまでは未使用(`abi.rs` と同じ扱い)
 
@@ -21,7 +26,16 @@ use crate::abi::{
     STATUS_BAILOUT, STATUS_HALTED, TAPE_BYTES,
 };
 use crate::error::CompileError;
-use crate::limits::MAX_MODULE_BYTES;
+use crate::limits::{MAX_LOOP_DEPTH, MAX_MODULE_BYTES};
+
+/// 生成中の制御構造の開き具合。離脱先(外側の `block`)より内側に開いている枠を数える。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Nesting {
+    /// 開いている枠の数(一般ループ 1 つにつき `block` と `loop` の 2 つ)。
+    frames: u32,
+    /// 開いているループの数(入れ子の上限の検査に使う)。
+    loops: usize,
+}
 
 /// 引数 `limit`(局所変数 0)。
 const LOCAL_LIMIT: u32 = 0;
@@ -72,9 +86,11 @@ pub(crate) fn emit(ir: &OptimizedProgram) -> Result<Vec<u8>, CompileError> {
 
     // 離脱先のブロック。すべての操作の検査失敗はここへ分岐する。
     body.instruction(&Instruction::Block(BlockType::Empty));
+    let mut nest = Nesting::default();
     for op in ir.ops() {
-        emit_op(&mut body, op)?;
+        emit_op(&mut body, op, &mut nest)?;
     }
+    debug_assert_eq!(nest, Nesting::default(), "括弧は対応して閉じられている");
     // 停止: (STATUS_HALTED, 命令数, dp, steps)。
     body.instruction(&Instruction::I32Const(STATUS_HALTED));
     body.instruction(&Instruction::I32Const(to_i32(ir.source().len())?));
@@ -139,14 +155,16 @@ pub(crate) fn emit(ir: &OptimizedProgram) -> Result<Vec<u8>, CompileError> {
 }
 
 /// 1 操作ぶんの生成。先頭で `pc` を書き、種別ごとの規則で検査・適用・分岐する。
-fn emit_op(f: &mut Function, op: &Op) -> Result<(), CompileError> {
+fn emit_op(f: &mut Function, op: &Op, nest: &mut Nesting) -> Result<(), CompileError> {
     let start = to_i32(op.source_range().start)?;
     f.instruction(&Instruction::I32Const(start));
     f.instruction(&Instruction::LocalSet(LOCAL_PC));
 
+    // 離脱先(最外の `block`)までの深さ。内側に開いている枠の数に等しい。
+    let depth = nest.frames;
     match op.kind() {
         OpKind::Add(n) => {
-            guard_cost(f, op.naive_cost(0, 0))?;
+            guard_cost(f, op.naive_cost(0, 0), depth)?;
             // tape[dp] = (tape[dp] + n) mod 256(i32.store8 が下位 8 ビットを格納する)。
             f.instruction(&Instruction::LocalGet(LOCAL_DP));
             f.instruction(&Instruction::LocalGet(LOCAL_DP));
@@ -158,8 +176,8 @@ fn emit_op(f: &mut Function, op: &Op) -> Result<(), CompileError> {
         }
         OpKind::Move(n) => match op.static_reach() {
             Some((min, max)) => {
-                guard_cost(f, op.naive_cost(0, 0))?;
-                guard_reach(f, min, max)?;
+                guard_cost(f, op.naive_cost(0, 0), depth)?;
+                guard_reach(f, min, max, depth)?;
                 // dp += n。範囲検査の後なので結果は 0..=LAST_CELL に収まる。
                 f.instruction(&Instruction::LocalGet(LOCAL_DP));
                 f.instruction(&Instruction::I64ExtendI32U);
@@ -169,10 +187,10 @@ fn emit_op(f: &mut Function, op: &Op) -> Result<(), CompileError> {
                 f.instruction(&Instruction::LocalSet(LOCAL_DP));
                 charge(f, op.naive_cost(0, 0))?;
             }
-            None => always_bail(f),
+            None => always_bail(f, depth),
         },
         OpKind::Output => {
-            guard_cost(f, op.naive_cost(0, 0))?;
+            guard_cost(f, op.naive_cost(0, 0), depth)?;
             // bf.write(tape[dp])
             f.instruction(&Instruction::LocalGet(LOCAL_DP));
             f.instruction(&Instruction::I32Load8U(CELL));
@@ -180,37 +198,73 @@ fn emit_op(f: &mut Function, op: &Op) -> Result<(), CompileError> {
             charge(f, op.naive_cost(0, 0))?;
         }
         OpKind::Input => {
-            guard_cost(f, op.naive_cost(0, 0))?;
+            guard_cost(f, op.naive_cost(0, 0), depth)?;
             // tape[dp] = bf.read()
             f.instruction(&Instruction::LocalGet(LOCAL_DP));
             f.instruction(&Instruction::Call(FUNC_READ));
             f.instruction(&Instruction::I32Store8(CELL));
             charge(f, op.naive_cost(0, 0))?;
         }
-        // 直線的でない操作と未知の操作種別は、後続のタスクが種別ごとに置き換えるまで常に離脱する。
-        _ => always_bail(f),
+        OpKind::LoopStart { .. } => {
+            if nest.loops >= MAX_LOOP_DEPTH {
+                return Err(CompileError::NestingTooDeep);
+            }
+            // 構造: block { [の検査・charge・ゼロ判定(脱出は br 0)  loop { 本体 ] の検査・charge・br_if 0 } }。
+            // `[` の検査は入る時の 1 回だけで、`]` の戻り先は `loop` の先頭(本体の直前)。
+            // 核の `]` は非 0 のとき `[` の次へ戻り、`[` は再判定もコスト加算もされないため。
+            f.instruction(&Instruction::Block(BlockType::Empty));
+            nest.frames += 1;
+            nest.loops += 1;
+            // 検査は開いた `block` の内側で行う(離脱先までの深さは `nest.frames`)。
+            guard_cost(f, op.naive_cost(0, 0), nest.frames)?;
+            charge(f, op.naive_cost(0, 0))?;
+            // tape[dp] = 0 なら脱出先(`block` の末尾)へ分岐する。最内の枠は `block` なので深さは 0。
+            f.instruction(&Instruction::LocalGet(LOCAL_DP));
+            f.instruction(&Instruction::I32Load8U(CELL));
+            f.instruction(&Instruction::I32Eqz);
+            f.instruction(&Instruction::BrIf(0));
+            f.instruction(&Instruction::Loop(BlockType::Empty));
+            nest.frames += 1;
+        }
+        OpKind::LoopEnd { .. } => {
+            // 検査は開いたままの枠の内側で行う(離脱先までの深さは `nest.frames`)。
+            guard_cost(f, op.naive_cost(0, 0), depth)?;
+            charge(f, op.naive_cost(0, 0))?;
+            // tape[dp] != 0 なら本体の先頭(直近の `loop`)へ戻る。内側の括弧は閉じ済みなので深さは 0。
+            f.instruction(&Instruction::LocalGet(LOCAL_DP));
+            f.instruction(&Instruction::I32Load8U(CELL));
+            f.instruction(&Instruction::BrIf(0));
+            // 脱出: `loop` と `block` を閉じる。
+            f.instruction(&Instruction::End);
+            f.instruction(&Instruction::End);
+            nest.frames -= 2;
+            nest.loops -= 1;
+        }
+        // 直線的でない残りの操作(クリア・移動ループ・走査)と未知の操作種別は、
+        // 後続のタスクが種別ごとに置き換えるまで常に離脱する。
+        _ => always_bail(f, depth),
     }
     Ok(())
 }
 
-/// 常に離脱する(`pc` は既に操作の先頭を指している)。
-fn always_bail(f: &mut Function) {
-    f.instruction(&Instruction::Br(0));
+/// 常に離脱する(`pc` は既に操作の先頭を指している)。`depth` は離脱先までの深さ。
+fn always_bail(f: &mut Function, depth: u32) {
+    f.instruction(&Instruction::Br(depth));
 }
 
-/// コスト検査: `remaining = limit - steps` が `cost` 未満なら離脱する。
-fn guard_cost(f: &mut Function, cost: u64) -> Result<(), CompileError> {
+/// コスト検査: `remaining = limit - steps` が `cost` 未満なら離脱する。`depth` は離脱先までの深さ。
+fn guard_cost(f: &mut Function, cost: u64, depth: u32) -> Result<(), CompileError> {
     f.instruction(&Instruction::LocalGet(LOCAL_LIMIT));
     f.instruction(&Instruction::LocalGet(LOCAL_STEPS));
     f.instruction(&Instruction::I64Sub);
     f.instruction(&Instruction::I64Const(to_i64(cost)?));
     f.instruction(&Instruction::I64LtS);
-    f.instruction(&Instruction::BrIf(0));
+    f.instruction(&Instruction::BrIf(depth));
     Ok(())
 }
 
-/// 到達範囲検査: `dp + min < 0` または `dp + max > LAST_CELL` なら離脱する。
-fn guard_reach(f: &mut Function, min: isize, max: isize) -> Result<(), CompileError> {
+/// 到達範囲検査: `dp + min < 0` または `dp + max > LAST_CELL` なら離脱する。`depth` は離脱先までの深さ。
+fn guard_reach(f: &mut Function, min: isize, max: isize, depth: u32) -> Result<(), CompileError> {
     // dp < -min
     f.instruction(&Instruction::LocalGet(LOCAL_DP));
     f.instruction(&Instruction::I64ExtendI32U);
@@ -230,7 +284,7 @@ fn guard_reach(f: &mut Function, min: isize, max: isize) -> Result<(), CompileEr
     ));
     f.instruction(&Instruction::I64GtS);
     f.instruction(&Instruction::I32Or);
-    f.instruction(&Instruction::BrIf(0));
+    f.instruction(&Instruction::BrIf(depth));
     Ok(())
 }
 
