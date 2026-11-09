@@ -7,8 +7,8 @@
 use brainfuck_core::TAPE_SIZE;
 use wasmi::errors::LinkerError;
 use wasmi::{
-    Caller, Config, Engine, Error as WasmiError, Linker, Module, ResourceLimiter, Store,
-    StoreLimits, StoreLimitsBuilder, TrapCode,
+    Caller, CompilationMode, Config, Engine, Error as WasmiError, Linker, Module, ResourceLimiter,
+    Store, StoreLimits, StoreLimitsBuilder, TrapCode,
 };
 
 use crate::abi::{
@@ -38,6 +38,8 @@ pub(crate) struct Loaded {
     engine: Engine,
     module: Module,
     linker: Linker<HostState>,
+    /// 生成物のバイト数。直線的な本体の入口での一括請求分を、燃料の下駄として加える。
+    static_fuel: u64,
 }
 
 /// 1 回の実行の結果(素朴意味論への変換は呼び出し側が行う)。
@@ -69,6 +71,9 @@ pub(crate) fn load(module: &[u8]) -> Result<Loaded, CompileError> {
     let mut config = Config::default();
     config
         .consume_fuel(true)
+        // 遅延翻訳(既定)では関数本体の翻訳費用が最初の run の燃料から引かれ、実行順序で結果が変わる。
+        // 読み込み時に全関数を翻訳して、翻訳費用を実行の燃料から切り離す。
+        .compilation_mode(CompilationMode::Eager)
         .allow_start_fn(false)
         // SIMD・memory64 は wasmi の Cargo feature で既定オフ(本 crate は有効化しない)。
         .wasm_reference_types(false)
@@ -82,6 +87,7 @@ pub(crate) fn load(module: &[u8]) -> Result<Loaded, CompileError> {
         .wasm_sign_extension(false)
         .wasm_mutable_global(false);
     let engine = Engine::new(&config);
+    let static_fuel = u64::try_from(module.len()).unwrap_or(u64::MAX);
     let module = Module::new(&engine, module).map_err(|_| CompileError::Engine)?;
     let mut linker = Linker::new(&engine);
     define_host(&mut linker).map_err(|_| CompileError::Engine)?;
@@ -89,6 +95,7 @@ pub(crate) fn load(module: &[u8]) -> Result<Loaded, CompileError> {
         engine,
         module,
         linker,
+        static_fuel,
     };
 
     // 受け入れ確認: 使い捨てのストアでインスタンス化し、run とメモリの形を確かめる。
@@ -112,7 +119,8 @@ pub(crate) fn load(module: &[u8]) -> Result<Loaded, CompileError> {
     Ok(loaded)
 }
 
-/// 1 回の実行。燃料は `limit × FUEL_PER_STEP + FUEL_BASE`、出力量の上限は `MAX_OUTPUT_BYTES`。
+/// 1 回の実行。燃料は `limit × FUEL_PER_STEP + FUEL_BASE + 生成物のバイト数`、出力量の上限は `MAX_OUTPUT_BYTES`。
+/// 生成物のバイト数を加えるのは、直線的な本体が入口で一括に請求されても上限 0 で枯渇しないようにするため。
 pub(crate) fn run(loaded: &Loaded, input: &[u8], limit: u64) -> Result<RawRun, RunError> {
     run_with_output_cap(loaded, input, limit, MAX_OUTPUT_BYTES)
 }
@@ -128,7 +136,8 @@ fn run_with_output_cap(
     let mut store = new_store(&loaded.engine, HostState::new(input, output_cap));
     let fuel = limit
         .saturating_mul(FUEL_PER_STEP)
-        .saturating_add(FUEL_BASE);
+        .saturating_add(FUEL_BASE)
+        .saturating_add(loaded.static_fuel);
     store.set_fuel(fuel).map_err(|_| RunError::Engine)?;
     let instance = loaded
         .linker
@@ -371,9 +380,10 @@ mod tests {
         assert_eq!(raw.tape.len(), TAPE_SIZE);
     }
 
-    /// 燃料 = limit × FUEL_PER_STEP + FUEL_BASE の接続を確かめる。
+    /// 燃料 = limit × FUEL_PER_STEP + FUEL_BASE + 生成物のバイト数 の接続を確かめる。
     /// 1000 反復・反復あたり 5 命令の有限ループ(約 5000 の燃料を消費する)を走らせる。
-    /// 下の境界(limit 10 → 燃料 1664)は中断、上の境界(limit 100 → 燃料 7424)は完走する。
+    /// 生成物のバイト数(数十バイト)を含めても、下の境界(limit 10 → 1664 + 数十)は中断、
+    /// 上の境界(limit 100 → 7424 + 数十)は完走する。
     #[test]
     fn fuel_formula_bounds_a_finite_loop() {
         let mut body = vec![
@@ -496,5 +506,46 @@ mod tests {
     fn start_function_is_rejected_at_load() {
         let bytes = module_with(halted_tail(), true);
         assert_eq!(load(&bytes).err(), Some(CompileError::Engine));
+    }
+
+    /// 直線的な本体(`i32.const 0; i32.const 1; i32.store8` を `pairs` 回並べ、末尾で停止)。
+    /// 命令数は `3 × pairs`。ループを含まないため、燃料は本体の実行分だけを消費する。
+    fn straight_line_body(pairs: usize) -> Vec<Instruction<'static>> {
+        let mut body = Vec::with_capacity(pairs * 3 + 4);
+        for _ in 0..pairs {
+            body.push(Instruction::I32Const(0));
+            body.push(Instruction::I32Const(1));
+            body.push(Instruction::I32Store8(store8_at_zero()));
+        }
+        body.extend(halted_tail());
+        body
+    }
+
+    /// 遅延翻訳では、最初の run が関数本体の翻訳費用を燃料から引く。
+    /// そのため同じ `Loaded` でも実行順序によって結果が変わってはならない(要件 4.8 の根拠: 燃料の挙動は実行順序に依存せず決定的)。
+    /// 最初の実行を上限 0 にしても `WatchdogTripped` にならず、後の大きな上限の結果は新規読み込みと一致する。
+    #[test]
+    fn first_run_with_zero_limit_does_not_depend_on_translation_order() {
+        let bytes = module_with(straight_line_body(2_000), false);
+
+        let shared = load(&bytes).expect("読み込める");
+        let first = run(&shared, b"", 0).expect("上限 0 でも翻訳費用で燃料枯渇しない");
+        assert_eq!(first.status, Status::Halted);
+        let later = run(&shared, b"", 1_000_000).expect("後の実行も完走する");
+
+        let fresh = load(&bytes).expect("読み込める");
+        let baseline = run(&fresh, b"", 1_000_000).expect("新規の読み込みでも完走する");
+        assert_eq!(later, baseline, "実行順序に依存せず結果が同じ");
+        assert_eq!(later.tape[0], 1);
+    }
+
+    /// 長い直線の本体は入口で一括に燃料を請求されるため、上限 0 でも枯渇してはならない(生成物のバイト数を燃料に加える)。
+    #[test]
+    fn long_straight_line_body_does_not_run_out_of_fuel_at_zero_limit() {
+        let loaded = load(&module_with(straight_line_body(2_000), false)).expect("読み込める");
+
+        let raw = run(&loaded, b"", 0).expect("直線の本体は上限 0 でも枯渇しない");
+        assert_eq!(raw.status, Status::Halted);
+        assert_eq!(raw.tape[0], 1);
     }
 }

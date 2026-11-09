@@ -326,7 +326,7 @@ flowchart TD
 | 4.5 | 上限 0 かつ非空はエラー | emit, program(上流 `replay`) | 最初の操作で離脱 → `StepLimitExceeded { 0, 0 }` | WASM 実行フロー |
 | 4.6 | 比較は有限上限必須、最大値 | compare, ComparisonService | `MAX_COMPARISON_STEPS`、`maxSteps: number` | - |
 | 4.7 | メモリを増やさない | runtime, audit | メモリ 1 ページ固定 + `ResourceLimiter` | - |
-| 4.8 | 実行時間の有界化(第二の防御) | runtime | 燃料 `limit × FUEL_PER_STEP + FUEL_BASE` | - |
+| 4.8 | 実行時間の有界化(第二の防御) | runtime | 燃料 `limit × FUEL_PER_STEP + FUEL_BASE + 生成物のバイト数` | - |
 | 4.9 | 資源違反を方式の失敗として区別 | runtime, report | `RunError` → `FailureKind` | - |
 | 5.1 | 自己生成物のみ実行 | WasmProgram | 外部モジュールを受け取る API なし | - |
 | 5.2 | import は入出力のみ | abi, audit, runtime | `bf.read` / `bf.write` のみ定義、WASI なし | - |
@@ -526,7 +526,8 @@ fn finish(program: &Program, raw: RawRun, input: &[u8], limit: u64) -> Result<Wa
   - `bf.read`: 未読バイトがあれば 1 バイト返して位置を進め、なければ 0 を返し位置を進めない
   - `bf.write`: `output.len() >= MAX_OUTPUT_BYTES` ならトラップ(`OutputLimitExceeded`)、そうでなければ末尾へ追加
 - `ResourceLimiter`: メモリの成長を拒否(1 ページ固定)、テーブルなし、インスタンス・メモリ数の上限 1
-- 燃料: `fuel = limit.saturating_mul(FUEL_PER_STEP).saturating_add(FUEL_BASE)`。枯渇(`OutOfFuel`)は `RunError::WatchdogTripped`
+- 燃料: `fuel = limit.saturating_mul(FUEL_PER_STEP).saturating_add(FUEL_BASE).saturating_add(static_fuel)`(`static_fuel` = 生成物のバイト数)。枯渇(`OutOfFuel`)は `RunError::WatchdogTripped`
+  - コンパイルは `CompilationMode::Eager`(読み込み時に全関数を翻訳)とする。既定の遅延翻訳では関数本体の翻訳費用が最初の run の燃料から引かれ、実行順序で結果が変わるため(要件 4.8 の有界化の根拠(燃料の挙動が実行順序に依存せず決定的であること)を損なう)。`static_fuel` は、直線的な本体が入口で一括に請求される分を上限 0 でも賄うために加える
 - 実行ごとに新しい `Store` とインスタンス(線形メモリはゼロ初期化される = 初期テープ)。`Module` はコンパイル済みを再利用する
 - 実行後: 戻り値 `(status, pc, dp, steps)` を読み、線形メモリ先頭 30,000 バイトをテープとしてコピーし、`HostState` から入力位置・出力を取り出す
 
