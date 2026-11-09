@@ -40,7 +40,7 @@ Phase 2 の完了後、仕様書の外側として品質基盤の 2 spec(desktop
 - [x] debugger-state -- Phase 1.5: ブレークポイント、StopReason(Breakpoint/Cancelled)、バッチ実行(既定1,000命令)、テープ表示窓(±16)、命令添字→ソース範囲/行・列変換。Dependencies: brainfuck-core
 - [x] desktop-gui -- Phase 2: Tauri 2 + React + CodeMirror 6、Run/Pause/Step/Reset、テープ/出力/状態ビュー、括弧対応・現在命令強調、DTO と Tauri コマンド(最小 6 コマンドを含む。詳細は desktop-gui の design)、CLI 一致検証。Dependencies: debugger-state, brainfuck-cli, brainfuck-core
 - [x] optimized-interpreter -- Phase 3: IR、連続命令統合、代表的ループ最適化、素朴実装とのディファレンシャルテスト、ベンチマーク(正規テストと分離)。Dependencies: brainfuck-core
-- [ ] compiler-comparison -- Phase 4: WASM またはネイティブ AOT の少なくとも一方、方式・実行時間・命令数・終了状態を表示する比較画面。Dependencies: optimized-interpreter, desktop-gui, brainfuck-core
+- [x] compiler-comparison -- Phase 4: WASM またはネイティブ AOT の少なくとも一方、方式・実行時間・命令数・終了状態を表示する比較画面。Dependencies: optimized-interpreter, desktop-gui, brainfuck-core
 - [x] desktop-gui-e2e-browser -- 品質基盤: Playwright + Chromium で desktop-gui の画面を検証する E2E。`brainfuck-gui-api` の stdio バイナリと Node の中継で実 Rust バックエンドを通し、`@tauri-apps/api/mocks` の `mockIPC` で IPC を差し替える。手動スモーク 1〜15 のうちブラウザで検証できる項目を自動化し、Linux の CI で実行する。Dependencies: desktop-gui
 - [x] desktop-gui-e2e-webview -- 品質基盤: 実 Tauri アプリ(WebView2、Windows 限定)に CDP(`connectOverCDP`)で接続し、起動・Hello World・Pause と再開・閉じる確認・WebView2 の既定動作の抑止・CSP の実効を少数のシナリオで検証する。実験的で、CI では初期は非必須。Dependencies: desktop-gui-e2e-browser, desktop-gui
 
