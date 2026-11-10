@@ -1,0 +1,200 @@
+# 一時的な実験ワークフロー: WebView2 の CDP の口が GitHub ランナーで開かない原因を、1 回の実行で複数パターン並列に切り分ける。
+# 仮説: windows-latest でアプリが昇格(High Integrity)して動くため、WebView2(Runtime 150 以降)は環境変数
+#       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS を無視する(WebView2Feedback #5640)。昇格したホストが従うのは
+#       HKLM のポリシーと、アプリが API(additionalBrowserArgs)で直接渡す引数だけ。
+# 製品のコードと既存のワークフローは変更しない。原因が確定したら、このファイルは削除する。
+name: wv-cdp-probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/wv-cdp-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Node 26 を導入
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Rust stable を導入
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust のビルドキャッシュ(実アプリの独立ワークスペース)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: 依存関係を導入
+        run: npm ci
+
+      - name: 実アプリの debug ビルド(通常の設定)
+        run: npm run e2e:webview:prepare
+
+      - name: 通常の exe を out/plain にコピー
+        shell: pwsh
+        run: |
+          $src = Join-Path $PWD 'src-tauri/target/debug/brainfuck-studio.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw "exe が見つからない: $src" }
+          $dst = Join-Path $env:GITHUB_WORKSPACE 'out/plain'
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item -LiteralPath $src -Destination (Join-Path $dst 'brainfuck-studio.exe') -Force
+
+      - name: テスト専用の設定ファイルを作る(window の項目を写し、additionalBrowserArgs を足す)
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:RUNNER_TEMP 'cdp.conf.json'
+          $base = Get-Content -Raw -LiteralPath 'src-tauri/tauri.conf.json' | ConvertFrom-Json
+          $src = $base.app.windows[0]
+          $win = [ordered]@{}
+          $src.PSObject.Properties | ForEach-Object { $win[$_.Name] = $_.Value }
+          $win['additionalBrowserArgs'] = '--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=0'
+          $patch = [ordered]@{ app = [ordered]@{ windows = @($win) } }
+          $patch | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $cfg -Encoding utf8
+          Get-Content -Raw -LiteralPath $cfg
+
+      - name: テスト専用の設定で再ビルド(additionalBrowserArgs を API 経由で渡す)
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:RUNNER_TEMP 'cdp.conf.json'
+          npx tauri build --debug --no-bundle --config $cfg
+          if ($LASTEXITCODE -ne 0) { throw "tauri build --config が終了コード $LASTEXITCODE で終わった" }
+          $src = Join-Path $PWD 'src-tauri/target/debug/brainfuck-studio.exe'
+          $dst = Join-Path $env:GITHUB_WORKSPACE 'out/conf'
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item -LiteralPath $src -Destination (Join-Path $dst 'brainfuck-studio.exe') -Force
+
+      - name: 実験用の exe を artifact に保存
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-exe
+          path: out/
+          if-no-files-found: error
+          retention-days: 3
+
+  probe:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pattern: [A-env, B-hklm, B2-hklm-env, C-hklm-port0, D-runas, E-conf]
+    steps:
+      - name: 実験用の exe を取得
+        uses: actions/download-artifact@v7
+        with:
+          name: probe-exe
+          path: exe
+
+      - name: WebView2 の Evergreen ランタイムを導入
+        shell: pwsh
+        run: |
+          $bootstrapper = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+          $install = Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "WebView2 の導入が終了コード $($install.ExitCode) で終わりました" }
+
+      - name: 実験(${{ matrix.pattern }})
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $p = '${{ matrix.pattern }}'
+          $exeName = 'brainfuck-studio.exe'
+          $ws = $env:GITHUB_WORKSPACE
+          $exe = if ($p -eq 'E-conf') { Join-Path $ws "exe/conf/$exeName" } else { Join-Path $ws "exe/plain/$exeName" }
+          $resultFile = Join-Path $env:RUNNER_TEMP "probe-result-$p.txt"
+          $udir = Join-Path $env:RUNNER_TEMP "ud-$p"
+          New-Item -ItemType Directory -Force $udir | Out-Null
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          $port = 9333
+          $log = New-Object System.Collections.Generic.List[string]
+          $log.Add("pattern: $p")
+          $ok = $false
+          try {
+            # 継承した WEBVIEW2_* を消して、この実験で設定するものだけを有効にする
+            Get-ChildItem env: | Where-Object { $_.Name -like 'WEBVIEW2_*' } | ForEach-Object { Remove-Item "env:$($_.Name)" }
+            $log.Add("exe exists=$(Test-Path -LiteralPath $exe) path=$exe")
+            $log.Add(((whoami /groups | Select-String 'Mandatory Label' | ForEach-Object { $_.Line }) -join ' ').Trim())
+            $log.Add("EnableLUA=" + (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -EA SilentlyContinue).EnableLUA)
+            $log.Add("WebView2 pv=" + (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -EA SilentlyContinue).pv)
+
+            function Set-Policy([string]$arg) {
+              New-Item $key -Force | Out-Null
+              New-ItemProperty $key -Name $exeName -Value $arg -PropertyType String -Force | Out-Null
+            }
+            switch ($p) {
+              'A-env'        { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port" }
+              'B-hklm'       { Set-Policy "--remote-debugging-port=$port" }
+              'B2-hklm-env'  { Set-Policy "--remote-debugging-port=$port"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port" }
+              'C-hklm-port0' { Set-Policy '--remote-debugging-port=0'; $port = 0 }
+              'D-runas'      { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$port" }
+              'E-conf'       { $port = 0 }
+            }
+            $env:WEBVIEW2_USER_DATA_FOLDER = $udir
+            $log.Add("policy[$exeName]=" + (Get-ItemProperty $key -Name $exeName -EA SilentlyContinue).$exeName)
+            $log.Add("env ADDITIONAL=" + $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS)
+
+            if ($p -eq 'D-runas') {
+              $ro = (& runas.exe /trustlevel:0x20000 $exe 2>&1 | Out-String).Trim()
+              $log.Add("runas 出力: $ro")
+            } else {
+              Start-Process -FilePath $exe | Out-Null
+            }
+
+            for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+              Start-Sleep -Milliseconds 500
+              $q = $port
+              if ($q -eq 0) {
+                $f = Join-Path $udir 'EBWebView/DevToolsActivePort'
+                if (Test-Path -LiteralPath $f) { $q = [int](Get-Content -LiteralPath $f -TotalCount 1) } else { continue }
+              }
+              try {
+                $r = Invoke-RestMethod "http://127.0.0.1:$q/json/version" -TimeoutSec 2
+                $ok = $true
+                $log.Add("OK port=$q Browser=$($r.Browser)")
+              } catch {}
+            }
+            if (-not $ok) { $log.Add('NG: /json/version が応答しない') }
+
+            $dtap = Join-Path $udir 'EBWebView/DevToolsActivePort'
+            if (Test-Path -LiteralPath $dtap) {
+              $log.Add('DevToolsActivePort: ' + ((Get-Content -LiteralPath $dtap -TotalCount 2) -join ' | '))
+            } else {
+              $log.Add('DevToolsActivePort: なし')
+            }
+            foreach ($w in (Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -like "*$udir*" })) {
+              $log.Add("wv pid=$($w.ProcessId) rdp=$($w.CommandLine -match 'remote-debugging')")
+            }
+            $log.Add('app pids: ' + ((Get-CimInstance Win32_Process -Filter "Name='$exeName'" | ForEach-Object { $_.ProcessId }) -join ','))
+          } catch {
+            $log.Add("EXCEPTION: $($_.Exception.Message)")
+          } finally {
+            taskkill /IM $exeName /T /F 2>&1 | Out-Null
+            ($log -join "`n") | Out-File -FilePath $resultFile -Encoding utf8
+          }
+          if (-not $ok) { exit 1 }
+
+      - name: 結果を job の summary に書く
+        if: always()
+        shell: pwsh
+        run: |
+          $p = '${{ matrix.pattern }}'
+          $resultFile = Join-Path $env:RUNNER_TEMP "probe-result-$p.txt"
+          $body = if (Test-Path -LiteralPath $resultFile) { Get-Content -Raw -LiteralPath $resultFile } else { '結果ファイルが無い(実験ステップが途中で止まった)' }
+          "### $p`n~~~text`n$body`n~~~" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
