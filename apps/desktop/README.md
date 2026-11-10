@@ -211,7 +211,9 @@ mise exec node@26 -- npm run e2e:webview                         # 準備と実�
 
 ### デバッグ用の口の扱い
 
-- デバッグ用の口は、テストが起動したアプリのプロセスだけに、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` で開きます。アプリの既定の引数は消えず、テストの起動のブラウザプロセスの引数に追加されるだけです。
+- デバッグ用の口は、テストが起動したアプリのプロセスだけに、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=0` で開きます。アプリの既定の引数は消えず、テストの起動のブラウザプロセスの引数に追加されるだけです。
+- ポートは固定せず 0 番(OS が空きポートを選ぶ)にします。空きポートを先に取って渡す方式は、取ったあとに別のプロセスが使う競合が起きうるためです。実際のポートは、WebView2 が利用者データのフォルダ(`<一時フォルダ>/bfstudio-e2e-webview/scenario-<uuid>`)の下の `EBWebView/DevToolsActivePort` に書く 1 行目(ポート番号。2 行目は WebSocket のパス)から読みます。このファイルは起動の前に消し、現れるまで待ちます。上限(`E2E_APP_READY_MS`)は、ファイルを待つ段と CDP の応答を待つ段のそれぞれに適用されるため、合計では最大で上限の 2 倍まで待つことがあります。現れる前にアプリが終了したら早期終了として失敗します。
+- CI(`windows-latest`)では、ランナーのアプリが管理者権限(昇格)で動きます。昇格したホストの WebView2(Runtime 150 以降)は環境変数を無視するため、上の方式だけではデバッグ口が開きません。そこで `e2e-webview` の job の手順で、HKLM のポリシー `HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments` の値 `brainfuck-studio.exe` に `--remote-debugging-port=0` を書きます(WebView2Feedback #5640)。この設定は管理者で動くランナー専用で、昇格していないローカルの PC には影響しません(ローカルでは環境変数が効きます)。
 - 口は `127.0.0.1` にだけ開きます。テストの終了時には、起動したプロセスのツリーを `taskkill /T /F` で終わらせます。
 - 利用者データのフォルダは、シナリオごとの一時フォルダ(`<一時フォルダ>/bfstudio-e2e-webview/scenario-<uuid>`)です。通常の起動の利用者データには触れません。
 
@@ -510,7 +512,7 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 - **既定のコンテキストメニューの検出**: 最初の実装は UI Automation のルート直下の `Menu` を探しており、メニューが出ていても常に偽でした(11.7 の否定が何があっても合格する状態)。陽性対照が見つけ、`Chrome_WidgetWin_*` の最上位ウィンドウを列挙して UIA の部分木から `Menu` を探す形に直しました。
 - **前面化**: Windows の前面化ロックで `AppActivate` だけでは実アプリが前面にならず、OS のキー入力が失敗しました。復元と `AttachThreadInput` による `SetForegroundWindow` を足しました(入力を送らずに前面化を試し、前面にならなければ何も送らずに失敗する。送信の直前直後に前面を再確認する)。
 - 新しくビルドした実行ファイルは、この開発 PC で Avast に止められずに起動できました(以前は、新しくビルドした別の実行ファイルが固まったことがあります)。固まる場合は「トラブルシューティング」を参照してください。
-- GitHub Actions の `e2e-webview` の job は PR #14 で実行しましたが、`windows-latest` のランナー(WebView2 ランタイム 157.0.4341.42)では、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` が msedgewebview2 の起動引数に反映されず(`WEBVIEW2_USER_DATA_FOLDER` は反映される)、CDP の口が開かないため全シナリオが `AppLaunchError`(notReady)で失敗しました。ローカル(ランタイム 158.0.4370.7)では成功します。原因は未解明で、job は `continue-on-error` の非必須のままとし、必須への昇格は見送ります。
+- GitHub Actions の `e2e-webview` の job は PR #14 で実行しましたが、`windows-latest` のランナー(WebView2 ランタイム 157.0.4341.42)では、環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` が msedgewebview2 の起動引数に反映されず、CDP の口が開かないため全シナリオが `AppLaunchError`(notReady)で失敗しました(ローカル(ランタイム 158.0.4370.7)では成功)。原因は、ランナーのアプリが管理者権限(昇格)で動き、昇格したホストでは WebView2 が環境変数を無視することです(WebView2Feedback #5640)。CI の実験で、HKLM のポリシー(上の「デバッグ用の口の扱い」)と `DevToolsActivePort` の 1 行目からポートを読む方式で成功することを確かめ、job の手順にポリシーを書く手順を足しました。job は `continue-on-error` の非必須のままとし、必須への昇格は見送ります。
 
 ## トラブルシューティング
 

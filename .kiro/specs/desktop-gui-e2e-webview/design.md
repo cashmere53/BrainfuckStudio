@@ -23,7 +23,7 @@
 ## Boundary Commitments
 
 ### This Spec Owns
-- 実アプリのプロセスの管理: 実行ファイルのパスの解決、空きポートと一時的な利用者データのフォルダの割り当て、環境変数つきの起動、CDP の口の待機、プロセスツリーの終了と後始末(`e2e/support/webview/appProcess.ts`)
+- 実アプリのプロセスの管理: 実行ファイルのパスの解決、一時的な利用者データのフォルダの割り当て(デバッグ口のポートは DevToolsActivePort から読む)、環境変数つきの起動、CDP の口の待機、プロセスツリーの終了と後始末(`e2e/support/webview/appProcess.ts`)
 - OS の操作の窓口: WebView2 の版の取得、ウィンドウのタイトル、閉じる要求(`SC_CLOSE`)、OS のキー入力、既定のコンテキストメニューの検出(`e2e/support/webview/windowsHost.{ts,ps1}`)
 - 実アプリのページの観測の補助: IPC の要求の観測、`close-requested` の受信の計数、ナビゲーションの目印、アプリの抑止の無効化(陽性対照用)、CSP の違反の記録と外部の受け口(`appProbes.ts`、`cspProbe.ts`)
 - webview のフィクスチャ、準備物の確認、opt-in のプロジェクト定義、起動のランチャ
@@ -133,7 +133,7 @@ apps/desktop/
 │   │   ├── prerequisites.ts             # 準備物の不足の判定(純粋関数)と、不足の一覧と準備の案内の文面
 │   │   ├── windowsHost.ps1              # OS の操作の本体(動作: runtime / window / close / keys / menu)。結果は 1 行の JSON
 │   │   ├── windowsHost.ts               # PowerShell の起動と結果の解析(解析は純粋関数)。pid に束ねた窓口
-│   │   ├── appProcess.ts                # 空きポート、環境変数、起動、CDP の口の待機、終了と後始末
+│   │   ├── appProcess.ts                # 環境変数(デバッグ口はポート 0)、起動、DevToolsActivePort と CDP の口の待機、終了と後始末
 │   │   ├── appProbes.ts                 # IPC の観測、close-requested の計数、ナビゲーションの目印、抑止の無効化(陽性対照)
 │   │   ├── cspProbe.ts                  # 違反の記録と、外部オリジンの受け口(127.0.0.1 の HTTP サーバ)
 │   │   ├── fixtures.ts                  # `app` フィクスチャ(起動・接続・ページの特定・失敗時の添付・終了)
@@ -242,7 +242,7 @@ sequenceDiagram
 | 1.3 | 既存のコマンドを変えない | WebviewProjects、WebviewCli | `E2E_WEBVIEW=1` の opt-in | — |
 | 1.4 | Windows 以外で失敗 | WebviewPrerequisites、SetupProject | `missingWebviewPrerequisites` | — |
 | 1.5 | 準備物の不足の案内 | WebviewPrerequisites、SetupProject、AppLauncher | 不足の一覧と案内 | — |
-| 1.6 | 順に実行・シナリオごとの起動と分離 | WebviewProjects、AppLauncher、WebviewFixtures | `workers: 1`、空きポート、一時フォルダ | 起動・接続・終了 |
+| 1.6 | 順に実行・シナリオごとの起動と分離 | WebviewProjects、AppLauncher、WebviewFixtures | `workers: 1`、デバッグ口のポート 0(DevToolsActivePort から読む)、一時フォルダ | 起動・接続・終了 |
 | 1.7 | 起動の上限時間 | AppLauncher | `waitForCdpEndpoint`、`AppLaunchError` | 起動・接続・終了 |
 | 1.8 | 終了と後始末 | AppLauncher、WebviewFixtures、SetupProject | `terminate` | 起動・接続・終了 |
 | 1.9 | 失敗時の調査材料 | WebviewFixtures、AppLauncher | `outputTail`、スクリーンショットの添付 | 起動・接続・終了 |
@@ -379,7 +379,7 @@ export function bindWindowsHost(pid: number): BoundWindowsHost;
 ```typescript
 export type AppExit = { code: number | null; signal: NodeJS.Signals | null };
 export type CdpVersion = { browser: string; webSocketDebuggerUrl: string };
-export type LaunchOptions = { exePath: string; userDataRoot: string; readyWithinMs: number };
+export type LaunchOptions = { exePath: string; userDataRoot: string; readyWithinMs: number; userDataDir?: string }; // userDataDir は単体テスト専用
 export interface LaunchedApp {
   readonly pid: number;
   readonly cdpEndpoint: string;            // http://127.0.0.1:<port>
@@ -392,20 +392,23 @@ export interface LaunchedApp {
   terminate(): Promise<{ userDataRemoved: boolean }>;
 }
 export class AppLaunchError extends Error { readonly reason: "notFound" | "exitedEarly" | "notReady"; readonly outputTail: string }
-export function findFreePort(): Promise<number>;              // 127.0.0.1 に 0 番で bind して得た番号
+export function parseDevToolsActivePort(content: string): number | null;  // 1 行目がポート、2 行目が /devtools/... のパス(書きかけは null)
+export function devToolsActivePortPath(userDataDir: string): string;      // <利用者データ>/EBWebView/DevToolsActivePort
 /** 継承した WEBVIEW2_* を除き、デバッグ口(追加の引数)と利用者データの 2 つだけを設定した環境(純粋関数) */
-export function buildAppEnv(base: NodeJS.ProcessEnv, port: number, userDataDir: string): NodeJS.ProcessEnv;
+export function buildAppEnv(base: NodeJS.ProcessEnv, userDataDir: string): NodeJS.ProcessEnv;
 /** /json/version が応答するまで再試行する。プロセスの終了・上限超過で AppLaunchError(取得とプロセス状態は注入できる) */
 export function waitForCdpEndpoint(port: number, deps: { readyWithinMs: number; fetchVersion: (port: number) => Promise<CdpVersion | null>; hasExited: () => boolean }): Promise<CdpVersion>;
+export function waitForDevToolsPort(deps: { readyWithinMs: number; readFile: () => Promise<string | null>; hasExited: () => boolean }): Promise<number>;
 export function launchApp(options: LaunchOptions): Promise<LaunchedApp>;
 ```
-- 環境変数: `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`(デバッグ口だけ)、`WEBVIEW2_USER_DATA_FOLDER=<userDataRoot>/<一意の名前>`。`tauri.conf.json` は変更しないため、利用者の通常の起動ではデバッグ口は開かない(2.3)
+- 環境変数: `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=0`(デバッグ口だけ。空きポートを先に取らず、OS に選ばせる)、`WEBVIEW2_USER_DATA_FOLDER=<userDataRoot>/<一意の名前>`。`tauri.conf.json` は変更しないため、利用者の通常の起動ではデバッグ口は開かない(2.3)
 - 配布形との一致(2.1): Microsoft の `CreateCoreWebView2EnvironmentWithOptions` の文書のとおり、`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` はアプリが渡す追加の引数(wry の `--disable-features=msWebOOUI,...` など)に**追加**される(アプリの指定を置き換える環境変数は `WEBVIEW2_USER_DATA_FOLDER` だけ)。そのため、アプリの既定の引数を環境変数に写さない(写すとスイッチが重複し、wry の既定と食い違ったときに配布形の構成を黙って上書きする)
 - 配布形との一致の確認(1.5): 通常の起動とテストの起動のそれぞれで、WebView2 のブラウザプロセス(`msedgewebview2.exe`、アプリの子)のコマンドラインを `Win32_Process` で取り、重複を除いた実効のスイッチの集合を比べる。`--user-data-dir` の値を除いた差が `--remote-debugging-port` だけであること、テストの起動の `--user-data-dir` がシナリオごとの一時フォルダ(`userDataRoot` の下)を指すことを確かめ、README の記録に残す。ほかの差が出た場合(環境変数がアプリの指定を置き換えていた場合など)は、design を更新してから進める
-- 起動は `spawn(exePath, [], { env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] })`(シェルを介さない)
+- 起動は `spawn(exePath, [], { env, windowsHide: false, stdio: ["ignore", "pipe", "pipe"] })`(シェルを介さない)。起動の前に `<利用者データ>/EBWebView/DevToolsActivePort` を消し、現れて解析できる 1 行目のポートを `waitForDevToolsPort` で待つ(上限は `E2E_APP_READY_MS`、現れる前の終了は `exitedEarly`、上限超過は `notReady`)。そのあと `waitForCdpEndpoint` で `/json/version` の応答を待つ
+- CI(昇格したランナー)では環境変数が無視されるため、job の手順で HKLM のポリシー `AdditionalBrowserArguments`(値 `brainfuck-studio.exe` = `--remote-debugging-port=0`)を書く。ローカルには影響しない
 - `notReady` の文面は、ウイルス対策ソフトの除外・一時停止、新しい `CARGO_TARGET_DIR` での再ビルド、固まったプロセスは再起動で消えることを案内する(1.7)
 - 終了は `taskkill /PID <pid> /T /F` で WebView2 の子プロセスを含めて終わらせる。フォルダの削除は `fs.rm` の再試行つき(1.8)
-- 上限時間は `E2E_APP_READY_MS`(既定 60,000)
+- 上限時間は `E2E_APP_READY_MS`(既定 60,000)。DevToolsActivePort を待つ段と CDP の応答を待つ段のそれぞれに上限が適用されるため、合計では最大で上限の 2 倍まで待つことがある
 
 ### 観測(`appProbes.ts`、`cspProbe.ts`)
 
@@ -581,11 +584,11 @@ export function buildWebviewRun(argv: readonly string[], env: NodeJS.ProcessEnv,
 ## Testing Strategy
 
 ### Node の単体テスト(Vitest。`npm test` に含まれ、OS・実アプリ・ブラウザは不要)
-- Vitest の既定の環境は jsdom(`src/test/setup.ts` つき)のため、上流と同じく webview のすべての `*.test.ts` の先頭に `// @vitest-environment node` を置く(`appProcess` の空きポート、`cspProbe` の `node:http`、`windowsHost` の子プロセスなどが Node の API を使う)
+- Vitest の既定の環境は jsdom(`src/test/setup.ts` つき)のため、上流と同じく webview のすべての `*.test.ts` の先頭に `// @vitest-environment node` を置く(`appProcess` の DevToolsActivePort の解析と CDP の口の待機、`cspProbe` の `node:http`、`windowsHost` の子プロセスなどが Node の API を使う)
 - `paths.test.ts`: 実行ファイルのパスの優先順位(`E2E_APP_BIN` > `CARGO_TARGET_DIR` > 既定)と拡張子
 - `prerequisites.test.ts`: Windows 以外、実行ファイル・PowerShell・WebView2・`dist/` のそれぞれの欠落で(ランチャ用の判定は Windows と `dist/` だけ)、案内の文面(`npm run e2e:webview:prepare` など)が出ること、すべて揃えば空
 - `windowsHost.test.ts`: 各動作の結果の解析、`error` の行と形の違う行の拒否、`delivered: false` が `HostActionError` になること
-- `appProcess.test.ts`: `buildAppEnv` が継承した `WEBVIEW2_*` を除いて 2 つだけを設定し、追加の引数が `--remote-debugging-port=<port>` だけ(アプリの既定の引数を含まない)であること、`waitForCdpEndpoint` が応答で解決・プロセスの終了で `exitedEarly`・上限超過で `notReady`(案内の文面を含む)になること(偽の取得関数)
+- `appProcess.test.ts`: `buildAppEnv` が継承した `WEBVIEW2_*` を除いて 2 つだけを設定し、追加の引数が `--remote-debugging-port=0` だけ(アプリの既定の引数を含まない)であること、`parseDevToolsActivePort` が 1 行目のポートを返し、取り違え・書きかけ・不正な値を null にすること、`waitForDevToolsPort` がファイルの出現まで待ち、早期終了・上限超過で失敗すること、`waitForCdpEndpoint` が応答で解決・プロセスの終了で `exitedEarly`・上限超過で `notReady`(案内の文面を含む)になること(偽の取得関数)
 - `appProbes.test.ts`: `installIpcRecorder` を偽の `window`(偽の `chrome.webview.postMessage` と、`callbacks` の Map を持つ偽の `__TAURI_INTERNALS__`)に適用し、要求の JSON から `cmd` が記録され元の `postMessage` に同じ文字列が渡ること、callback / error の id を `get` で引くと完了(連番と成否)が記録され元の `get` の結果が返ること、解析できない文字列を記録しないこと、前提(`callbacks` が Map でない、`chrome.webview` が無い)を欠くと理由つきで失敗すること、`ipc.localhost` 宛ての `fetch` が保険として記録されること。`armResponse` が確定より前に完了した同じコマンドを拾わず、確定以後の完了で解決すること(競合の防止)
 - `cspProbe.test.ts`: 受け口が要求を数え、閉じられること
 - `projects.test.ts`: `E2E_WEBVIEW` が無いと空配列、`1` なら 2 つのプロジェクトで `workers: 1`・`dependencies`・`testMatch` が設計どおり

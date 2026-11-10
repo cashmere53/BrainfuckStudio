@@ -31,7 +31,7 @@
   - Tauri の `additionalBrowserArgs` を使う方式は、既定の利用者データのフォルダと引数の組み合わせが変わるため別のデータディレクトリが要る。環境変数ならアプリの設定を変えずに済む
   - 利用者データの削除は、WebView2 の遅延した後始末のため失敗することがある
   - Microsoft の `CreateCoreWebView2EnvironmentWithOptions` の文書によれば、`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` はアプリが `AdditionalBrowserArguments` で渡す引数に**追加**される(アプリの指定を置き換える環境変数は `WEBVIEW2_USER_DATA_FOLDER` だけ)。wry が渡す既定の引数(`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` など)は、環境変数を付けても残る
-- **Implications**: シナリオごとに空きポートと一時フォルダを割り当てる。追加の引数の環境変数にはデバッグ口(`--remote-debugging-port=<port>`)だけを入れ、アプリの既定の引数を写さない(写すとスイッチが重複し、wry の既定と食い違ったときに配布形の構成を黙って上書きする)。追加であることは 1.5 でブラウザプロセスのコマンドラインを比べて確かめる。削除の失敗は警告の注釈にし、次回の実行の準備で古いフォルダを掃除する。接続後はアプリのページ(URL が `http://tauri.localhost` で始まる)を探して使う
+- **Implications**: シナリオごとに一時フォルダを割り当てる。デバッグ口はポート 0 で開き、実際のポートは `EBWebView/DevToolsActivePort` の 1 行目から読む(空きポートを先に取る方式は競合が起きうるため廃止)。追加の引数の環境変数にはデバッグ口(`--remote-debugging-port=<port>`)だけを入れ、アプリの既定の引数を写さない(写すとスイッチが重複し、wry の既定と食い違ったときに配布形の構成を黙って上書きする)。追加であることは 1.5 でブラウザプロセスのコマンドラインを比べて確かめる。削除の失敗は警告の注釈にし、次回の実行の準備で古いフォルダを掃除する。接続後はアプリのページ(URL が `http://tauri.localhost` で始まる)を探して使う
 
 ### 閉じる要求の起こし方
 - **Context**: brief は (a) `e2e` Cargo feature のテスト専用コマンド、(b) 対象外、の二択を design に委ねた。OS の閉じるボタンは CDP から押せない
@@ -151,6 +151,7 @@
 
 ## Risks & Mitigations
 - `tauri build --debug --no-bundle` の出力が想定と違う(パス・組み込みモード) — 基盤のタスクで実行して確かめ、`paths.ts` の既定を合わせる。`E2E_APP_BIN` で回避できる
+- GitHub のランナー(`windows-latest`)ではアプリが管理者権限(昇格)で動き、WebView2 Runtime 150 以降は昇格したホストで環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` を無視する(WebView2Feedback #5640)。CI の実験で、HKLM のポリシー `HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments`(値 `brainfuck-studio.exe` = `--remote-debugging-port=0`)と `DevToolsActivePort` からのポート取得で成功した。CI の手順でポリシーを書いて対処する(ローカルの環境変数は昇格していない PC で効く)
 - 環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` が、文書(追加される)と違って wry の既定の追加引数(`--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` など)を置き換える — 環境変数にはデバッグ口だけを入れ、通常の起動とテストの起動で WebView2 のブラウザプロセスのコマンドラインの重複を除いた実効のスイッチの集合を比べて、差が(`--user-data-dir` の値を除いて)`--remote-debugging-port` だけであることを 1.5 で確かめる。既定のメニューの表示先(`msWebOOUI`)が変わると 11.7 の前提が変わるため、差が出れば design を更新してから進める
 - IPC の要求(`http://ipc.localhost/...`)が CDP から見えない — 実アプリで顕在化した(製品の CSP により postMessage に切り替わり、ネットワーク要求にならない。`invoke` も書き換え不可)。postMessage の方式に切り替えて解消した(上記の Decision)
 - `__TAURI_INTERNALS__.callbacks`・`runCallback`・`chrome.webview.postMessage` は Tauri・wry の内部 API で、更新で変わりうる — 記録器の設置時に `callbacks instanceof Map` と `chrome.webview.postMessage` の存在を検査し、満たさなければ理由つきで明示的に失敗させる(偽の合格や無言の待ち時間切れにしない)。Tauri・wry の更新を Revalidation Trigger にする
