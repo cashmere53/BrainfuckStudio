@@ -99,8 +99,57 @@ export type ComparisonControllerDeps = {
   workspace: ComparisonWorkspace;
 };
 
+/**
+ * 画面の外で保持する比較の選択(方式のチェックと繰り返し回数の入力欄)。タブ切替で画面が作り直されても既定に戻らないよう、
+ * 画面より長く生きるコントローラが持つ。デバッガの状態には触れない。
+ */
+export type ComparisonForm = {
+  /** 最適化インタプリタを比較に含めるか */
+  optimized: boolean;
+  /** WASM コンパイル実行を比較に含めるか */
+  wasm: boolean;
+  /** 繰り返し回数の入力欄の文字列(不正値も含む)。null は利用者が未編集で、取得した既定の回数を使う */
+  repetitionsText: string | null;
+};
+
+export const initialComparisonForm: ComparisonForm = { optimized: true, wasm: true, repetitionsText: null };
+
+export type ComparisonFormStore = {
+  getState(): ComparisonForm;
+  /** 状態の変化を購読する。解除関数を返す */
+  subscribe(listener: () => void): () => void;
+  /** 指定した項目だけを変える(値が変わったときだけ通知する) */
+  update(patch: Partial<ComparisonForm>): void;
+};
+
+export function createComparisonFormStore(): ComparisonFormStore {
+  let form: ComparisonForm = initialComparisonForm;
+  const listeners = new Set<() => void>();
+  return {
+    getState: () => form,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    update(patch) {
+      const next = { ...form, ...patch };
+      if (next.optimized === form.optimized && next.wasm === form.wasm && next.repetitionsText === form.repetitionsText) {
+        return;
+      }
+      form = next;
+      for (const listener of [...listeners]) {
+        listener();
+      }
+    },
+  };
+}
+
 export type ComparisonController = {
   getState(): ComparisonState;
+  /** 画面の外で保持する方式と繰り返し回数 */
+  form: ComparisonFormStore;
   /** 状態の変化を購読する。解除関数を返す */
   subscribe(listener: () => void): () => void;
   /**
@@ -115,6 +164,7 @@ export type ComparisonController = {
 export function createComparisonController({ backend, workspace }: ComparisonControllerDeps): ComparisonController {
   let state: ComparisonState = initialComparisonState;
   const listeners = new Set<() => void>();
+  const form = createComparisonFormStore();
 
   const dispatch = (action: ComparisonAction): void => {
     const next = comparisonReducer(state, action);
@@ -129,6 +179,7 @@ export function createComparisonController({ backend, workspace }: ComparisonCon
 
   return {
     getState: () => state,
+    form,
     subscribe(listener) {
       listeners.add(listener);
       return () => {

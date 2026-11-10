@@ -179,3 +179,133 @@ describe("比較画面の状態の保持(要件 11.4・11.8)", () => {
     expect(screen.getByRole("table")).toBeTruthy();
   });
 });
+
+describe("比較画面の方式と繰り返し回数の保持(タブ切替で既定に戻らない)", () => {
+  const REPETITIONS_LABEL = "繰り返し回数(1〜5)";
+  const REPETITIONS_RANGE_REASON = "繰り返し回数は 1 以上 5 以下で指定してください";
+
+  function repetitionsInput() {
+    return screen.getByLabelText(REPETITIONS_LABEL) as HTMLInputElement;
+  }
+
+  async function openComparison() {
+    selectTab("比較");
+    await screen.findByText("比較できる命令数の上限は 1000 です");
+  }
+
+  let saved: { source: string; limitText: string } | null = null;
+  beforeEach(() => {
+    const snapshot = workspaceStore.getSnapshot();
+    saved = { source: snapshot.source, limitText: snapshot.limit.text };
+    act(() => {
+      workspaceStore.setSource("+.");
+      workspaceStore.setLimitText("100");
+    });
+  });
+  afterEach(() => {
+    if (saved !== null) {
+      const restore = saved;
+      act(() => {
+        workspaceStore.setSource(restore.source);
+        workspaceStore.setLimitText(restore.limitText);
+      });
+    }
+  });
+
+  it("方式のチェックと繰り返し回数を変えて、デバッガへ行って戻っても保持される", async () => {
+    renderAppWithComparison({ run: () => COMPARISON_DONE });
+    await openComparison();
+    fireEvent.click(screen.getByLabelText("最適化インタプリタ"));
+    fireEvent.change(repetitionsInput(), { target: { value: "4" } });
+
+    selectTab("デバッガ");
+    await openComparison();
+
+    // 片方だけ外して、チェックの対応が取り違えられていないことも確かめる
+    expect((screen.getByLabelText("最適化インタプリタ") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("WASM コンパイル実行") as HTMLInputElement).checked).toBe(true);
+    expect(repetitionsInput().value).toBe("4");
+  });
+
+  it("不正な回数(0・6・空欄)を入力したまま往復しても、入力と無効理由が残る", async () => {
+    renderAppWithComparison({ run: () => COMPARISON_DONE });
+    await openComparison();
+
+    for (const invalid of ["0", "6", ""]) {
+      fireEvent.change(repetitionsInput(), { target: { value: invalid } });
+      selectTab("デバッガ");
+      await openComparison();
+
+      expect(repetitionsInput().value).toBe(invalid);
+      expect(screen.getByRole("button", { name: "比較を実行" }).hasAttribute("disabled")).toBe(true);
+      expect(screen.getByText(REPETITIONS_RANGE_REASON)).toBeTruthy();
+    }
+  });
+
+  it("利用者が触っていないときは、取得した既定の繰り返し回数を表示する", async () => {
+    renderAppWithComparison({ run: () => COMPARISON_DONE, getInfo: () => ({ ...COMPARISON_INFO, defaultRepetitions: 3 }) });
+    await openComparison();
+
+    expect(repetitionsInput().value).toBe("3");
+    expect((screen.getByLabelText("最適化インタプリタ") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("WASM コンパイル実行") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("利用者が編集した回数は、タブ往復で情報を再取得しても既定値で上書きされない", async () => {
+    let fetches = 0;
+    renderAppWithComparison({
+      run: () => COMPARISON_DONE,
+      getInfo: () => {
+        fetches += 1;
+        return { ...COMPARISON_INFO, defaultRepetitions: fetches === 1 ? 1 : 3 };
+      },
+    });
+    await openComparison();
+    fireEvent.change(repetitionsInput(), { target: { value: "4" } });
+
+    selectTab("デバッガ");
+    await openComparison();
+
+    expect(fetches).toBe(2);
+    expect(repetitionsInput().value).toBe("4");
+  });
+
+  it("既定の回数のままなら、再取得で既定値の変更が反映される", async () => {
+    let fetches = 0;
+    renderAppWithComparison({
+      run: () => COMPARISON_DONE,
+      getInfo: () => {
+        fetches += 1;
+        return { ...COMPARISON_INFO, defaultRepetitions: fetches === 1 ? 1 : 3 };
+      },
+    });
+    await openComparison();
+    expect(repetitionsInput().value).toBe("1");
+
+    selectTab("デバッガ");
+    await openComparison();
+
+    expect(repetitionsInput().value).toBe("3");
+  });
+
+  it("保持された方式と回数で比較を実行すると、その選択で要求が送られる", async () => {
+    const requests: unknown[] = [];
+    renderAppWithComparison({
+      run: (request) => {
+        requests.push(request);
+        return COMPARISON_DONE;
+      },
+    });
+    await openComparison();
+    fireEvent.click(screen.getByLabelText("WASM コンパイル実行"));
+    fireEvent.change(repetitionsInput(), { target: { value: "2" } });
+    selectTab("デバッガ");
+    await openComparison();
+
+    fireEvent.click(screen.getByRole("button", { name: "比較を実行" }));
+    await screen.findByRole("table");
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ repetitions: 2, methods: ["optimized"] });
+  });
+});

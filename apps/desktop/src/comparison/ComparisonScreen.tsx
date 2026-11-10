@@ -53,11 +53,9 @@ export function ComparisonScreen(props: ComparisonScreenProps = {}) {
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
 
   const [info, setInfo] = useState<ComparisonInfoDto | null>(null);
+  // 方式と繰り返し回数の入力はコントローラが持つ(画面切替で既定に戻らない)。繰り返し回数は null なら既定の回数を使う
+  const form = useSyncExternalStore(controller.form.subscribe, controller.form.getState, controller.form.getState);
   const [infoError, setInfoError] = useState<ApiError | null>(null);
-  const [optimized, setOptimized] = useState(true);
-  const [wasm, setWasm] = useState(true);
-  // null は「既定の繰り返し回数を使う」。情報を取得して既定値が分かってから表示する
-  const [repetitionsText, setRepetitionsText] = useState<string | null>(null);
 
   // 画面表示時に比較の情報(上限値・繰り返しの既定と最大)を取得する
   useEffect(() => {
@@ -80,8 +78,9 @@ export function ComparisonScreen(props: ComparisonScreenProps = {}) {
   }, [backend]);
 
   const running = state.phase === "running";
-  const effectiveRepetitionsText = repetitionsText ?? String(info?.defaultRepetitions ?? 1);
-  const selection: Selection = { optimized, wasm, repetitions: parseRepetitions(effectiveRepetitionsText) };
+  // 既定の回数は情報を取得して初めて分かる。利用者が編集するまでは取得した既定値を表示する
+  const effectiveRepetitionsText = form.repetitionsText ?? String(info?.defaultRepetitions ?? 1);
+  const selection: Selection = { optimized: form.optimized, wasm: form.wasm, repetitions: parseRepetitions(effectiveRepetitionsText) };
 
   // 実行できない理由: 情報が無い場合はその旨、ある場合は要求の導出が返す理由
   let reasonText: string | null = null;
@@ -119,14 +118,14 @@ export function ComparisonScreen(props: ComparisonScreenProps = {}) {
         {info !== null ? (
           <>
             <MethodOptions
-              optimized={optimized}
-              wasm={wasm}
+              optimized={form.optimized}
+              wasm={form.wasm}
               repetitionsText={effectiveRepetitionsText}
               maxRepetitions={info.maxRepetitions}
               disabled={running}
-              onOptimizedChange={setOptimized}
-              onWasmChange={setWasm}
-              onRepetitionsTextChange={setRepetitionsText}
+              onOptimizedChange={(checked) => controller.form.update({ optimized: checked })}
+              onWasmChange={(checked) => controller.form.update({ wasm: checked })}
+              onRepetitionsTextChange={(text) => controller.form.update({ repetitionsText: text })}
             />
             <p className="comparison-limit-note">{`比較できる命令数の上限は ${info.maxSteps} です`}</p>
           </>
