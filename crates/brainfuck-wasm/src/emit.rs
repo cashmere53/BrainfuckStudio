@@ -16,8 +16,6 @@
 //! `block` の末尾が 0 セルの脱出先。`loop` の先頭は `[` の次(本体の直前)で、`]` が非 0 のとき戻る。
 //! 離脱先の `br` の深さは、外側の離脱先ブロックから数えた開いている枠の数(`Nesting::frames`)で決める。
 
-#![allow(dead_code)] // 公開窓口(2.4)から呼ばれるまでは未使用(`abi.rs` と同じ扱い)
-
 use brainfuck_optimized::{Op, OpKind, OptimizedProgram, Term};
 use wasm_encoder::{
     BlockType, CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,

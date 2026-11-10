@@ -484,7 +484,7 @@ pub(crate) fn emit(ir: &OptimizedProgram) -> Result<Vec<u8>, CompileError>;
 | Requirements | 4.7, 5.2, 5.3, 13.8 |
 
 **Responsibilities & Constraints**
-- `wasmparser` で次をすべて検査し、1 つでも外れれば `PolicyViolation` を返す(実行しない): import 集合が `{ bf.read: () -> i32, bf.write: (i32) -> () }` に厳密一致、メモリが 1 つで最小 = 最大 = 1 ページ・共有でも 64 ビットでもない、テーブルなし、グローバルの定義・import・export なし、start 関数なし、export 集合が `{ run, memory }` に厳密一致、関数本体に `memory.grow` と間接呼び出し(`call_indirect`)と浮動小数点命令が存在しない
+- `wasmparser` で整形式かつ検証を通ることを先に確認し、整形式でないバイト列は `PolicyViolation::Malformed` で拒否する。続けて次をすべて検査し、1 つでも外れれば `PolicyViolation` を返す(実行しない): import 集合が `{ bf.read: () -> i32, bf.write: (i32) -> () }` に厳密一致、メモリが 1 つで最小 = 最大 = 1 ページ・共有でも 64 ビットでもなく、`page_size_log2` の指定がない(既定の 64 KiB ページ。指定があれば既定と同じ値でも拒否する)、テーブルなし、グローバルの定義・import・export なし、start 関数なし、export 集合が `{ run, memory }` に厳密一致、関数本体に `memory.grow` と間接呼び出し(`call_indirect`)と浮動小数点命令が存在しない
 - エンジン側でも不要な提案(SIMD、浮動小数点、スレッド、参照型、バルクメモリなど)を無効化して二重化する(`runtime.rs`)
 
 ```rust
@@ -827,7 +827,7 @@ function deriveRequest(ws: WorkspaceValues, sel: Selection, info: ComparisonInfo
 
 ### Unit / Integration — `crates/brainfuck-wasm/`
 - **emit_structure.rs**(2.2, 2.4, 2.5): 全 `OpKind`(`Add` `Move` `Output` `Input` `LoopStart/End` `Clear` `Transfer` `Scan`)を含むプログラムで生成物が `wasmparser` 検証と `audit` を通ること、同一 IR から同一バイト列、空プログラム、ループ入れ子 256 は成功し 257 は `NestingTooDeep`、モジュールサイズ上限超過の合成プログラムが `ModuleTooLarge`
-- **audit の `#[cfg(test)]`**(5.2, 5.3, 13.8): 手組みの違反モジュール(余分な import、メモリ拡張可・2 ページ、テーブル、start 関数、グローバル、余分な export、`memory.grow`、間接呼び出し、浮動小数点命令)がそれぞれ `PolicyViolation` で拒否され実行されないこと。生成物は常に通ること
+- **audit の `#[cfg(test)]`**(5.2, 5.3, 13.8): 手組みの違反モジュール(余分な import、メモリ拡張可・2 ページ、ページサイズ指定(1 バイト・64 KiB の明示)、テーブル、start 関数、グローバル、余分な export、`memory.grow`、間接呼び出し、浮動小数点命令)がそれぞれ `PolicyViolation` で拒否され実行されないこと。生成物は常に通ること
 - **run_basic.rs**(2.3, 2.4, 3.4, 6.x): 同一 `WasmProgram` を異なる入力・上限で連続実行して互いに独立、hello(ワークスペースの `examples/hello.bf` を `include_str!`。コピーを置かない)/ echo(`,[.,]` を直接記述。0x00・0xFF 入力)、空プログラム、`bailed_out` が離脱なしで `false`(`replayed_steps` は 0)
 - **vs_core.rs**(WASM 側の核との差分テスト。1.6, 3.1-3.4, 4.1-4.5, 6.x): 直線的な操作・一般ループ・クリア・乗算・走査の代表プログラムを、上限 0〜N+2 の全数、左右端、入力 空 / 尽きる / `0x00`・`0xFF` で core の `Machine` と完全比較(`WasmRun` の全項目)。広い網羅(括弧対応の全列挙・乱数・パターン)は `brainfuck-compare` の `diff_*` が持つ
 - **cost_oracle.rs**(1.9, 4.1, 4.2, 4.8): 各 `OpKind` について、前置きで現在セルを `v` ∈ {0, 1, 2, 127, 128, 255} にした単一操作のプログラムを大きな上限で実行し、`steps_executed − 前置きの実行数` が `Op::naive_cost(v, k)`(`Scan` の `k` は前置きで並べたセル数からテストが独立に求める)と一致すること。`Move` / `Transfer` は `dp` を端へ運び、離脱の有無(`WasmRun.bailed_out`。範囲外が最初の命令で起きると `replayed_steps` は 0 のままなので使わない)が `Op::static_reach` の範囲条件(`Transfer` は `v != 0` のとき)と一致すること(必要以上に離脱しない)。最悪ケース(`body_len` の大きい `Transfer`、長い `Scan`、`v = 255`)で `FUEL_PER_STEP` 内に収まり枯渇しないこと
