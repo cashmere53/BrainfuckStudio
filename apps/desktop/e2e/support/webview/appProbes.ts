@@ -1,17 +1,17 @@
 // webview の E2E の実アプリのページの観測の補助(AppProbes)。製品のコードは変えず、ページの外から観測する。
-// - IPC の観測(方式は postMessage の 1 つ。IPC_OBSERVATION_MODE で選ぶ)
+// - IPC の観測(方式は IPC_OBSERVATION_MODE で選ぶ。名前は既存の観測との互換のため postMessage のまま)
 // - close-requested の受信の計数、ページ内の目印によるナビゲーションの検出、抑止の無効化(陽性対照)
 // ページ内で実行する関数(page.evaluate に渡すもの)は自己完結させ、モジュールのスコープの値を参照しない。
 //
-// IPC の観測の根拠(実アプリで確認済み): 製品の CSP(connect-src 未指定)が Tauri の fetch 方式の IPC を拒否するため、
-// Tauri は window.chrome.webview.postMessage に切り替える。要求はネットワークに出ず、応答は Rust が
-// webview.eval で __TAURI_INTERNALS__.runCallback(id, data) を呼んで返す。ネットワークの観測や invoke の包み込みでは
-// 取れないため、postMessage の包み込み(要求)と callbacks の get の包み込み(完了)で観測する。
+// IPC の観測の根拠(実アプリで確認済み): 製品の CSP は connect-src 'self' ipc: http://ipc.localhost を許すため、
+// Tauri は fetch 方式の IPC(http://ipc.localhost/<cmd>)で要求する。この経路は window.fetch の包み込みで観測する。
+// CSP が拒否されたときに Tauri が切り替える window.chrome.webview.postMessage の経路も、同じ記録に残す
+// (要求は postMessage の包み込み、完了は callbacks の get の包み込みで観測する)。
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { CLOSE_REQUESTED_EVENT } from "../../../src/ipc/backend.ts";
 
-/** IPC の観測の方式。現在は postMessage の 1 つ(実アプリで動作を確認済み) */
+/** IPC の観測の方式。現在は 1 つ(実アプリで、要求と完了が fetch 方式の記録に入ることを確認済み) */
 export type IpcObservationMode = "postMessage";
 
 /** フィクスチャが使う方式 */
@@ -60,7 +60,7 @@ type ProbeWindow = {
  * - 要求: postMessage に渡る JSON から cmd・callback・error を取って記録する。元の呼び出しと戻り値はそのまま
  * - 完了: runCallback が記録した callback または error の id を callbacks.get で引いた時点で done を付ける。
  *   成否は引かれた id の種類で決める(callback の id なら ok: true、error の id なら ok: false)
- * - 念のため window.fetch の ipc.localhost 宛ても記録する(CSP が変わって fetch 方式に戻った場合の保険)
+ * - window.fetch の ipc.localhost 宛ても記録する(製品の CSP が connect-src で許すため、通常の IPC はこちらで記録される)
  */
 function installIpcRecorder(): string {
   const w = window as unknown as {

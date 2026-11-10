@@ -53,7 +53,7 @@
 | 13.2 | 静的 | 実行は `brainfuck-core` の意味論に限る。外部プロセスや OS の呼び出しが無いことは `brainfuck-gui-api` の依存とコードで確認 |
 | 13.3 | 部分的 | ケイパビリティの許可集合が登録済みコマンドと一致し、`fs`・`dialog`・`shell`・`http`・`core:window:*` を含まないこと、CSP の内容は `commands.rs` で確認。CSP が実 WebView で効くこと(スクリプトの外部読み込みの遮断)は手動(専用のスモーク項目は無く、スモーク 1 の起動時のコンソールで確認する) |
 | 13.4 | 部分的 | 読み書きがダイアログで選んだパスに限られることは `files.rs`、`documentFlow.test.ts` で確認。ダイアログ自体は手動(スモーク 10.1) |
-| 13.5 | 静的 | ネットワーク通信を行わない。CSP とケイパビリティに `http` が無いこと(`commands.rs`)と依存の確認 |
+| 13.5 | 静的 | ネットワーク通信を行わない。CSP の `connect-src` は `'self'`・`ipc:`・`http://ipc.localhost` のみ(外部への取得を許さない)、ケイパビリティに `http` が無いこと(`commands.rs`)と依存の確認 |
 | 13.6 | 自動 | 入力・ソース・バッチ幅・半径・ブレークポイント数の上限は `service_flow.rs`、`service_batch.rs`、`service_breakpoints_pause.rs`、`limits.test.ts` で確認 |
 | 13.8 | 静的 | `apps/desktop/src-tauri/Cargo.toml` の `[lints.rust] unsafe_code = "forbid"`、`cargo check` と `cargo clippy --all-targets -- -D warnings` の成功 |
 | 14.1、14.2 | 部分的 | ショートカットの割り当てと押しっぱなしは `shortcuts.test.ts`、`documentOperations.test.tsx` で確認。F5・Ctrl+R のリロード抑止と右クリックの既定メニューは WebView2 の挙動で手動(スモーク 11.6〜11.7、13) |

@@ -111,12 +111,39 @@ fn csp_allows_only_the_app_origin_for_scripts_and_styles() {
     );
     for (name, sources) in &directives {
         for source in sources {
+            // 例外は connect-src の IPC の 1 件だけ(csp_connect_src_allows_only_the_ipc_channels で固定する)
+            let is_ipc_channel = *name == "connect-src" && *source == IPC_HTTP_SOURCE;
             assert!(
-                !source.contains("http") && *source != "*" && *source != "'unsafe-eval'",
+                is_ipc_channel
+                    || (!source.contains("http") && *source != "*" && *source != "'unsafe-eval'"),
                 "csp directive {name} allows an external source or eval: {source}"
             );
         }
     }
+}
+
+/// Windows の Tauri の IPC(fetch 方式)の宛先。Tauri 2 の CSP の例と同じ値。
+const IPC_HTTP_SOURCE: &str = "http://ipc.localhost";
+
+#[test]
+fn csp_connect_src_allows_only_the_ipc_channels() {
+    // connect-src 未指定だと default-src 'self' に落ち、Tauri の fetch 方式の IPC が拒否される。
+    // 許すのは自アプリのオリジンと Tauri の IPC の 2 種だけ(ワイルドカード・外部ホスト・unsafe-* は含めない)。
+    let config = tauri_config();
+    let csp = config["app"]["security"]["csp"]
+        .as_str()
+        .expect("app.security.csp is a string");
+    let connect_src: Vec<&str> = csp
+        .split(';')
+        .map(str::trim)
+        .find_map(|d| d.strip_prefix("connect-src"))
+        .map(|rest| rest.split_whitespace().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        connect_src,
+        vec!["'self'", "ipc:", IPC_HTTP_SOURCE],
+        "csp: {csp}"
+    );
 }
 
 #[test]
