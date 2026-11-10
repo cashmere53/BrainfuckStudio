@@ -4,12 +4,14 @@
 // 3. 実行ファイルと dist/ の有無を合わせ、不足があれば一覧と準備のコマンドを示して失敗する(1.4、1.5)
 // 4. WebView2 の版を注釈と添付に記録する(1.10)
 // 5. 一時的な利用者データのフォルダの根の古いフォルダを掃除する。失敗は警告の注釈にとどめる(1.8)
+// 0. 実行の開始時に、前の実行の「CDP の口が開かなかった」記録を消す(launchGate。消せなければ失敗)
 import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "@playwright/test";
 import { DIST_INDEX_PATH } from "../support/paths.ts";
 import { appBinaryPath, userDataRoot } from "../support/webview/paths.ts";
+import { clearLaunchGate, webviewLaunchGateStore } from "../support/webview/launchGate.ts";
 import { missingWebviewPrerequisites, type PrerequisiteFacts } from "../support/webview/prerequisites.ts";
 import { selectStaleUserDataEntries, type UserDataEntry } from "../support/webview/userDataCleanup.ts";
 import { HostActionError, readWebView2Version } from "../support/webview/windowsHost.ts";
@@ -42,6 +44,9 @@ function removeStaleUserDataFolders(root: string, nowMs: number): string[] {
 }
 
 test("webview の準備物が揃っている", async ({}, testInfo) => {
+  // 前の実行が残した「CDP の口が開かなかった」記録を消す。消せなければ失敗させ、古い記録で後続をスキップしないようにする
+  clearLaunchGate(webviewLaunchGateStore(os.tmpdir()));
+
   if (process.platform !== "win32") {
     // Windows 以外は OS の窓口を呼ばず、Windows 限定の 1 行だけを示して失敗する(1.4)
     const lines = missingWebviewPrerequisites({
