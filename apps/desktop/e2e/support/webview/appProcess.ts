@@ -150,7 +150,7 @@ export async function fetchCdpVersion(port: number): Promise<CdpVersion | null> 
 
 function notReadyMessage(readyWithinMs: number, symptom: string): string {
   return [
-    `アプリの${symptom}(上限 ${readyWithinMs} ms。E2E_APP_READY_MS で変更できます)。`,
+    `アプリの ${symptom}(上限 ${readyWithinMs} ms。E2E_APP_READY_MS で変更できます)。`,
     "次を確かめてください:",
     "- ウイルス対策ソフト(Avast など)が新しい exe を止めていないか。除外に登録するか、一時停止してから再実行してください",
     "- 新しい CARGO_TARGET_DIR で再ビルドしてください(exe が新しく作られた直後に止められることがあります)",
