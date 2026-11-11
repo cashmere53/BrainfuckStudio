@@ -109,17 +109,17 @@ fn csp_allows_only_the_app_origin_for_scripts_and_styles() {
         Some(&vec!["'self'"]),
         "csp: {csp}"
     );
-    for (name, sources) in &directives {
-        for source in sources {
-            // 例外は connect-src の IPC の 1 件だけ(csp_connect_src_allows_only_the_ipc_channels で固定する)
-            let is_ipc_channel = *name == "connect-src" && *source == IPC_HTTP_SOURCE;
-            assert!(
-                is_ipc_channel
-                    || (!source.contains("http") && *source != "*" && *source != "'unsafe-eval'"),
-                "csp directive {name} allows an external source or eval: {source}"
-            );
-        }
-    }
+    // 各ディレクティブで許す source を明示的な許可リストにする。http / https / ワイルドカード / unsafe-eval など、
+    // 許可リストにない source(ディレクティブ自体の追加も含む)が混入したら失敗する。
+    let allowed: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::from([
+        ("default-src", vec!["'self'"]),
+        ("script-src", vec!["'self'"]),
+        ("style-src", vec!["'self'", "'unsafe-inline'"]),
+        ("img-src", vec!["'self'", "data:"]),
+        // connect-src の内訳は csp_connect_src_allows_only_the_ipc_channels でも固定する
+        ("connect-src", vec!["'self'", "ipc:", IPC_HTTP_SOURCE]),
+    ]);
+    assert_eq!(directives, allowed, "csp: {csp}");
 }
 
 /// Windows の Tauri の IPC(fetch 方式)の宛先。Tauri 2 の CSP の例と同じ値。
