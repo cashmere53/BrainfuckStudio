@@ -99,6 +99,7 @@ mod tests {
                 PolicyViolation::MemoryGrow => 6,
                 PolicyViolation::IndirectCall => 7,
                 PolicyViolation::FloatingPoint => 8,
+                PolicyViolation::Malformed => 9,
             }
         }
         assert_eq!(
@@ -108,6 +109,7 @@ mod tests {
         assert_eq!(compile_kind(CompileError::Engine), 3);
         assert_eq!(run_kind(RunError::InvalidState), 2);
         assert_eq!(policy_kind(PolicyViolation::FloatingPoint), 8);
+        assert_eq!(policy_kind(PolicyViolation::Malformed), 9);
     }
 
     /// 依存の疎通: wasm-encoder で手組みしたモジュールを wasmparser で検証し、

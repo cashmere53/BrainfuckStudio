@@ -1,8 +1,4 @@
 //! wasmi 上の隔離実行。エンジンの型はこのモジュールの外へ出さない。
-//!
-//! 公開窓口(2.4)から呼ばれるまでは未使用のため `dead_code` を許す(`abi.rs` と同じ扱い)。
-
-#![allow(dead_code)]
 
 use brainfuck_core::TAPE_SIZE;
 use wasmi::errors::LinkerError;

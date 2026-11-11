@@ -6,7 +6,7 @@
 pub enum PolicyViolation {
     /// import 集合が `{bf.read: () -> i32, bf.write: (i32) -> ()}` と厳密一致しない。
     ImportSet,
-    /// メモリ宣言が 1 つ・最小 = 最大 = 1 ページ・非共有・32 ビットでない。
+    /// メモリ宣言が 1 つ・最小 = 最大 = 1 ページ・非共有・32 ビットで、ページサイズ指定がない(既定 64 KiB)ことを満たさない。
     Memory,
     /// テーブルが存在する。
     Table,
@@ -22,6 +22,8 @@ pub enum PolicyViolation {
     IndirectCall,
     /// 関数本体に浮動小数点命令が存在する。
     FloatingPoint,
+    /// 整形式でない(`wasmparser` の解析または検証に失敗する)バイト列。
+    Malformed,
 }
 
 /// コンパイル(生成・監査・ロード)の失敗。

@@ -37,11 +37,9 @@ struct Facts<'a> {
 /// 生成物が方針に適合するかを検査する。1 つでも外れれば違反を返し、実行されない。
 ///
 /// 最初に `wasmparser` で整形式かつ検証を通ることを確認し、そのうえで方針の項目を判定する。
-/// 整形式でないバイト列は方針に適合しないものとして拒否する(専用の違反種別は無いため
-/// `ImportSet` に写す。これは生成物の不整合を示す防御的な写像であり、生成器の出力は常に整形式)。
+/// 整形式でないバイト列(解析・検証の失敗)は `Malformed` で拒否する。生成器の出力は常に整形式であるため、
+/// この拒否は生成器の不整合を検出するための防御である。
 ///
-/// 配線は後続タスク 2.4 で行うまで未使用のため、限定的に警告を抑止する。
-#[allow(dead_code)]
 pub(crate) fn audit(module: &[u8]) -> Result<(), PolicyViolation> {
     Validator::new_with_features(WasmFeatures::all())
         .validate_all(module)
@@ -51,7 +49,7 @@ pub(crate) fn audit(module: &[u8]) -> Result<(), PolicyViolation> {
 }
 
 fn malformed(_error: BinaryReaderError) -> PolicyViolation {
-    PolicyViolation::ImportSet
+    PolicyViolation::Malformed
 }
 
 /// セクションを読んで構造を採取する。整形式であることは `audit` の検証で確認済み。
@@ -167,13 +165,15 @@ fn check_imports(
 }
 
 /// メモリが 1 つで、最小 = 最大 = 1 ページ、非共有、32 ビットであることを確認する。
+/// ページサイズは既定(64 KiB)に限り、`page_size_log2` の指定(`None` 以外)は既定と同じ値でも拒否する。
 fn check_memory(memories: &[MemoryType]) -> Result<(), PolicyViolation> {
     match memories {
         [memory]
             if !memory.memory64
                 && !memory.shared
                 && memory.initial == 1
-                && memory.maximum == Some(1) =>
+                && memory.maximum == Some(1)
+                && memory.page_size_log2.is_none() =>
         {
             Ok(())
         }
@@ -442,9 +442,20 @@ mod tests {
     }
 
     #[test]
-    fn malformed_bytes_are_rejected() {
-        assert!(audit(b"\0asm").is_err());
-        assert!(audit(&[]).is_err());
+    fn malformed_bytes_are_rejected_as_malformed() {
+        let valid = build(&Spec::default());
+        // 空・マジックナンバーのみ・マジックナンバー違い・バージョン違い。
+        assert_eq!(audit(&[]), Err(PolicyViolation::Malformed));
+        assert_eq!(audit(b"\0asm"), Err(PolicyViolation::Malformed));
+        assert_eq!(audit(b"\0asn\x01\0\0\0"), Err(PolicyViolation::Malformed));
+        assert_eq!(audit(b"\0asm\x02\0\0\0"), Err(PolicyViolation::Malformed));
+        // 途中で切れたセクション(末尾の code セクションの本体を欠く)。
+        assert_eq!(
+            audit(&valid[..valid.len() - 3]),
+            Err(PolicyViolation::Malformed)
+        );
+        // 先頭のセクションの途中で切れたもの。
+        assert_eq!(audit(&valid[..12]), Err(PolicyViolation::Malformed));
     }
 
     #[test]
@@ -566,6 +577,29 @@ mod tests {
         let mut spec = Spec::default();
         spec.memories = vec![MemoryType {
             memory64: true,
+            ..conforming_memory()
+        }];
+        assert_rejected(&spec, PolicyViolation::Memory);
+    }
+
+    #[test]
+    fn one_byte_page_memory_is_rejected() {
+        let mut spec = Spec::default();
+        spec.memories = vec![MemoryType {
+            minimum: 1,
+            maximum: Some(1),
+            page_size_log2: Some(0),
+            ..conforming_memory()
+        }];
+        assert_rejected(&spec, PolicyViolation::Memory);
+    }
+
+    #[test]
+    fn explicit_64_kib_page_size_is_rejected() {
+        // 既定と同じ 2^16 の明示も、方針は「指定なし」のみを許すため拒否する。
+        let mut spec = Spec::default();
+        spec.memories = vec![MemoryType {
+            page_size_log2: Some(16),
             ..conforming_memory()
         }];
         assert_rejected(&spec, PolicyViolation::Memory);

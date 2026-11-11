@@ -9,8 +9,6 @@
 //!
 //! メモリ配置: 線形メモリ先頭 `TAPE_SIZE`(30,000)バイトがテープ。残りは未使用。
 
-#![allow(dead_code)] // 生成・監査・実行の配線は後続タスク(2.x)で行う
-
 use brainfuck_core::TAPE_SIZE;
 
 /// import のモジュール名。
