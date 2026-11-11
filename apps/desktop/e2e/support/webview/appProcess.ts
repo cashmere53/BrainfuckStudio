@@ -1,10 +1,12 @@
-// 実アプリのプロセスの管理(AppLauncher)。シナリオごとに空きポートと一時的な利用者データのフォルダを割り当て、
+// 実アプリのプロセスの管理(AppLauncher)。シナリオごとに一時的な利用者データのフォルダを割り当て、
 // WebView2 の環境変数つきでシェルを介さずに起動し、CDP の口が応答するまで待つ。終了はプロセスツリーごと行う。
-// 純粋関数(buildAppEnv、readyWithinMsFromEnv、waitForCdpEndpoint)は偽の取得関数で単体テストする。
+// デバッグ口はポート 0 で開き、WebView2 が書く `<利用者データ>/EBWebView/DevToolsActivePort` の 1 行目から実際のポートを読む。
+// ポート 0 にするのは、昇格したホスト(GitHub の windows-latest など)では環境変数が無視されるため、
+// HKLM のポリシーで同じ引数を与える場合と同じ値を使うためである(apps/desktop/README.md)。
+// 純粋関数(buildAppEnv、parseDevToolsActivePort、readyWithinMsFromEnv、waitForCdpEndpoint)は偽の取得関数で単体テストする。
 import { execFile, spawn, type SpawnOptions } from "node:child_process";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import net from "node:net";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { SCENARIO_FOLDER_PREFIX } from "./userDataCleanup.ts";
@@ -24,7 +26,11 @@ export interface LaunchedApp {
   terminate(): Promise<{ userDataRemoved: boolean }>;
 }
 
-export type LaunchOptions = { exePath: string; userDataRoot: string; readyWithinMs: number };
+/**
+ * 起動の引数。userDataDir は単体テスト専用(古い DevToolsActivePort を置いた場所を指定するため)。
+ * 省略時はシナリオごとに userDataRoot の下に新しいフォルダを作る。
+ */
+export type LaunchOptions = { exePath: string; userDataRoot: string; readyWithinMs: number; userDataDir?: string };
 
 /** 起動の失敗の種類。理由と出力の末尾を持つ */
 export class AppLaunchError extends Error {
@@ -57,6 +63,9 @@ const KILL_WAIT_MS = 15_000;
 /** WebView2 の既定の環境変数の接頭辞。大文字・小文字を区別せず除く(Windows の環境変数の名前は大文字・小文字を区別しない) */
 const WEBVIEW2_PREFIX = "WEBVIEW2_";
 
+/** デバッグ口のポート 0(空きポートを OS に選ばせ、DevToolsActivePort に書かせる) */
+const DEBUG_PORT_AUTO = 0;
+
 /** 上限時間を環境変数 E2E_APP_READY_MS から読む。未指定・正の整数でなければ既定 */
 export function readyWithinMsFromEnv(env: NodeJS.ProcessEnv): number {
   const raw = env.E2E_APP_READY_MS;
@@ -67,30 +76,34 @@ export function readyWithinMsFromEnv(env: NodeJS.ProcessEnv): number {
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_READY_WITHIN_MS;
 }
 
-/** 127.0.0.1 の空きポートを 0 番で bind して得る */
-export function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        server.close();
-        reject(new Error("空きポートを取得できませんでした"));
-        return;
-      }
-      const port = address.port;
-      server.close(() => resolve(port));
-    });
-  });
+/**
+ * DevToolsActivePort の内容からポート番号を読む(純粋関数)。1 行目がポート番号、2 行目が WebSocket のパス(/devtools/browser/...)。
+ * 2 行目が無い・パスが / で始まらない(書きかけ)・ポートが 1〜65535 の整数でない場合は null。
+ */
+export function parseDevToolsActivePort(content: string): number | null {
+  const [firstLine = "", secondLine = ""] = content.split(/\r?\n/);
+  if (!secondLine.startsWith("/")) {
+    return null;
+  }
+  const first = firstLine.trim();
+  if (!/^\d+$/.test(first)) {
+    return null;
+  }
+  const port = Number(first);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
+/** DevToolsActivePort の場所(純粋関数)。WebView2 は利用者データのフォルダの下の EBWebView に書く */
+export function devToolsActivePortPath(userDataDir: string): string {
+  return path.join(userDataDir, "EBWebView", "DevToolsActivePort");
 }
 
 /**
  * 継承した WEBVIEW2_* を除き、デバッグ口(追加の引数)と利用者データのフォルダの 2 つだけを設定した環境(純粋関数)。
+ * デバッグ口はポート 0 で開き、実際のポートは DevToolsActivePort から読む。
  * アプリの既定の追加引数は写さない。環境変数はアプリの指定に追加される(research.md)。
  */
-export function buildAppEnv(base: NodeJS.ProcessEnv, port: number, userDataDir: string): NodeJS.ProcessEnv {
+export function buildAppEnv(base: NodeJS.ProcessEnv, userDataDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
     if (key.toUpperCase().startsWith(WEBVIEW2_PREFIX)) {
@@ -98,9 +111,18 @@ export function buildAppEnv(base: NodeJS.ProcessEnv, port: number, userDataDir: 
     }
     env[key] = value;
   }
-  env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${port}`;
+  env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${DEBUG_PORT_AUTO}`;
   env.WEBVIEW2_USER_DATA_FOLDER = userDataDir;
   return env;
+}
+
+/** 既定の読み取り: DevToolsActivePort の内容。無ければ null(投げない) */
+export async function readDevToolsActivePort(userDataDir: string): Promise<string | null> {
+  try {
+    return await readFile(devToolsActivePortPath(userDataDir), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /** 既定の取得関数: 127.0.0.1 の /json/version を読む。応答しない・不正なら null */
@@ -126,9 +148,9 @@ export async function fetchCdpVersion(port: number): Promise<CdpVersion | null> 
   }
 }
 
-function notReadyMessage(readyWithinMs: number): string {
+function notReadyMessage(readyWithinMs: number, symptom: string): string {
   return [
-    `アプリの CDP の口が ${readyWithinMs} ms 以内に応答しませんでした(E2E_APP_READY_MS で上限を変更できます)。`,
+    `アプリの ${symptom}(上限 ${readyWithinMs} ms。E2E_APP_READY_MS で変更できます)。`,
     "次を確かめてください:",
     "- ウイルス対策ソフト(Avast など)が新しい exe を止めていないか。除外に登録するか、一時停止してから再実行してください",
     "- 新しい CARGO_TARGET_DIR で再ビルドしてください(exe が新しく作られた直後に止められることがあります)",
@@ -167,7 +189,48 @@ export async function waitForCdpEndpoint(
       );
     }
     if (Date.now() >= deadline) {
-      throw new AppLaunchError("notReady", notReadyMessage(deps.readyWithinMs), tail);
+      throw new AppLaunchError("notReady", notReadyMessage(deps.readyWithinMs, "CDP の口が応答しませんでした"), tail);
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+}
+
+/**
+ * DevToolsActivePort が現れ、解析できる内容(書き終わったポート番号)になるまで再試行し、ポート番号を返す。
+ * プロセスが終了したら早期終了として、上限時間を超えたら案内つきで AppLaunchError を投げる。
+ * 読み取り・終了の判定・出力の末尾は注入できる(単体テストで偽の値を使う)。
+ */
+export async function waitForDevToolsPort(deps: {
+  readyWithinMs: number;
+  readFile: () => Promise<string | null>;
+  hasExited: () => boolean;
+  outputTail?: () => string;
+  intervalMs?: number;
+}): Promise<number> {
+  const interval = deps.intervalMs ?? POLL_INTERVAL_MS;
+  const deadline = Date.now() + deps.readyWithinMs;
+  for (;;) {
+    const content = await deps.readFile();
+    if (content !== null) {
+      const port = parseDevToolsActivePort(content);
+      if (port !== null) {
+        return port;
+      }
+    }
+    const tail = deps.outputTail?.() ?? "";
+    if (deps.hasExited()) {
+      throw new AppLaunchError(
+        "exitedEarly",
+        "アプリが DevToolsActivePort の作成の前に早期に終了しました。出力の末尾を確かめてください",
+        tail,
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new AppLaunchError(
+        "notReady",
+        notReadyMessage(deps.readyWithinMs, "DevToolsActivePort(CDP の口のポート)が現れませんでした"),
+        tail,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, interval));
   }
@@ -224,7 +287,7 @@ export function appSpawnOptions(env: NodeJS.ProcessEnv): SpawnOptions {
 }
 
 /**
- * 実アプリを起動して CDP の口が応答するまで待つ。シナリオごとに空きポートと一時フォルダを割り当てる。
+ * 実アプリを起動し、DevToolsActivePort からデバッグ口のポートを読んで CDP の口が応答するまで待つ。シナリオごとに一時フォルダを割り当てる。
  * 起動はシェルを介さず、標準出力と標準エラーの末尾を保持する。
  */
 export async function launchApp(options: LaunchOptions): Promise<LaunchedApp> {
@@ -232,9 +295,10 @@ export async function launchApp(options: LaunchOptions): Promise<LaunchedApp> {
     throw new AppLaunchError("notFound", `実行ファイルが見つかりません: ${options.exePath}`, "");
   }
 
-  const port = await findFreePort();
-  const userDataDir = scenarioUserDataDir(options.userDataRoot);
-  const child = spawn(options.exePath, [], appSpawnOptions(buildAppEnv(process.env, port, userDataDir)));
+  const userDataDir = options.userDataDir ?? scenarioUserDataDir(options.userDataRoot);
+  // 古い DevToolsActivePort を読まないよう、起動の前に消す(新しいフォルダでも念のため)
+  await rm(devToolsActivePortPath(userDataDir), { force: true }).catch(() => undefined);
+  const child = spawn(options.exePath, [], appSpawnOptions(buildAppEnv(process.env, userDataDir)));
 
   let tail = "";
   const onOutput = (chunk: string): void => {
@@ -271,8 +335,16 @@ export async function launchApp(options: LaunchOptions): Promise<LaunchedApp> {
     return { userDataRemoved };
   };
 
+  // 段ごとに上限時間を与える(ファイルの出現と CDP の応答の合計は最大で上限の 2 倍)
   let version: CdpVersion;
+  let port: number;
   try {
+    port = await waitForDevToolsPort({
+      readyWithinMs: options.readyWithinMs,
+      readFile: () => readDevToolsActivePort(userDataDir),
+      hasExited: () => exitState !== null,
+      outputTail: () => tail,
+    });
     version = await waitForCdpEndpoint(port, {
       readyWithinMs: options.readyWithinMs,
       fetchVersion: fetchCdpVersion,

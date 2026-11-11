@@ -78,6 +78,17 @@ jobs:
       - name: 実アプリの debug ビルド(準備)
         run: npm run e2e:webview:prepare
 
+      # 昇格したランナー専用の設定。windows-latest ではアプリが管理者権限(昇格)で動き、WebView2(Runtime 150 以降)は
+      # 昇格したホストで環境変数 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS を無視するため、デバッグ口が開かない(WebView2Feedback #5640)。
+      # そこで HKLM のポリシー AdditionalBrowserArguments に同じ引数を書く(ポート 0。実際のポートは DevToolsActivePort から読む)。
+      # 管理者で動くランナーでだけ必要。ローカル(昇格していない PC)では環境変数が効くため、この設定は影響しない。
+      - name: WebView2 のデバッグ口を HKLM のポリシーで指定(昇格したランナー用)
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name 'brainfuck-studio.exe' -Value '--remote-debugging-port=0' -PropertyType String -Force | Out-Null
+
       - name: webview の E2E
         run: npm run e2e:webview:run
 
