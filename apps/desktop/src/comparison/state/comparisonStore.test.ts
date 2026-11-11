@@ -12,6 +12,8 @@ import type { Selection } from "../domain/comparisonRequest";
 import {
   comparisonReducer,
   createComparisonController,
+  createComparisonFormStore,
+  initialComparisonForm,
   initialComparisonState,
   isResultStale,
   type ComparisonAction,
@@ -272,5 +274,41 @@ describe("createComparisonController: 実行・抑止・古い応答・エラー
     expect(source).not.toMatch(/debuggerStore|runController|RunController/);
     const ipcSource = readFileSync(join(__dirname, "..", "ipc.ts"), "utf8");
     expect(ipcSource).not.toMatch(/debuggerStore|runController|RunController/);
+  });
+});
+
+describe("createComparisonFormStore: 画面の外で保持する方式と繰り返し回数(タブ切替で既定に戻らない)", () => {
+  it("初期値は両方式オン・繰り返し回数は未編集(null = 取得した既定の回数を使う)", () => {
+    expect(initialComparisonForm).toEqual({ optimized: true, wasm: true, repetitionsText: null });
+    expect(createComparisonFormStore().getState()).toEqual(initialComparisonForm);
+  });
+
+  it("更新は指定した項目だけを変え、購読者へ通知する。解除後は通知しない", () => {
+    const store = createComparisonFormStore();
+    let calls = 0;
+    const unsubscribe = store.subscribe(() => {
+      calls += 1;
+    });
+
+    store.update({ wasm: false });
+    expect(store.getState()).toEqual({ optimized: true, wasm: false, repetitionsText: null });
+    store.update({ repetitionsText: "" });
+    expect(store.getState()).toEqual({ optimized: true, wasm: false, repetitionsText: "" });
+    expect(calls).toBe(2);
+
+    unsubscribe();
+    store.update({ optimized: false });
+    expect(calls).toBe(2);
+  });
+
+  it("コントローラは方式と回数を持ち、実行の状態とは独立に保持する", async () => {
+    const workspace = makeWorkspace();
+    const controller = createComparisonController({ backend: createFakeComparisonBackend({ run: () => result(100) }), workspace });
+    controller.form.update({ optimized: false, repetitionsText: "4" });
+
+    await controller.run(SELECTION, INFO);
+    controller.discard();
+
+    expect(controller.form.getState()).toEqual({ optimized: false, wasm: true, repetitionsText: "4" });
   });
 });
