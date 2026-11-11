@@ -7,7 +7,7 @@
   - Tauri 2 の実行ファイルは、Tauri CLI を通さずに `cargo build` すると開発モード(`devUrl` の `http://localhost:1420` を読む)になる。配布と同じ組み込みの画面と CSP で動かすには、`tauri build --debug --no-bundle`(`beforeBuildCommand` の `npm run build` を実行し、画面を実行ファイルへ組み込む debug ビルド)を使う
   - 閉じる要求は、OS のメッセージ `WM_SYSCOMMAND`/`SC_CLOSE` を実ウィンドウへ送れば、タイトルバーの × と同じ経路(`DefWindowProc` → `WM_CLOSE` → tao の `CloseRequested` → `window.rs` の `on_window_event`)を通る。製品にテスト専用のコマンドを足さずに済む
   - Playwright の WebView2 ガイドどおり、起動プロセスの環境変数 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>` と `WEBVIEW2_USER_DATA_FOLDER` で、テストが起動したプロセスだけに CDP の口を開き、利用者データを分けられる。`tauri.conf.json` は変更しない
-  - 実アプリ(Tauri 2.12)の IPC は、追加前は製品の CSP が `fetch` 方式(`http://ipc.localhost/<cmd>`)を拒否するため postMessage(`window.chrome.webview.postMessage`)で流れていた。`connect-src 'self' ipc: http://ipc.localhost` を足した後は fetch 方式で流れ、ネットワーク要求として観測できる。IPC の観測は、ページ内で `chrome.webview.postMessage`(要求)と `__TAURI_INTERNALS__.callbacks` の `get`(Rust からの応答)を記録する方式に確定した(2.3 の実アプリでの確認)
+  - 実アプリ(Tauri 2.12)の IPC は、追加前は製品の CSP が `fetch` 方式(`http://ipc.localhost/<cmd>`)を拒否するため postMessage(`window.chrome.webview.postMessage`)で流れていた。`connect-src 'self' ipc: http://ipc.localhost` を足した後は fetch 方式で流れ、ネットワーク要求として観測できる。IPC の観測は、主に `window.fetch`(ipc.localhost 宛)の包み込みで要求を記録し、完了は `__TAURI_INTERNALS__.callbacks` の `get`(Rust からの応答)で観測する(フォールバックの `chrome.webview.postMessage` 経路も同じ記録に残す)(2.3 の実アプリでの確認)
 
 ## Research Log
 
