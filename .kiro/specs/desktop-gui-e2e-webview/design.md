@@ -51,7 +51,7 @@
 - `tauri.conf.json` の `build`(`beforeBuildCommand`・`frontendDist`)、`app.windows`(タイトル)、`app.security.csp` の変更 → 準備のコマンドと CSP・起動のシナリオを再実行する
 - `src-tauri/src/window.rs`(閉じる判定とイベント名)、`src/app/shortcuts.ts`(キー・右クリックの抑止)、確認ダイアログの文言の変更 → 11.x のシナリオを見直す
 - Tauri・wry の更新(IPC の経路: `fetch` 方式の `http://ipc.localhost/<cmd>` が拒否されたときの `customProtocolIpcFailed` による postMessage への切り替え(`scripts/ipc-protocol.js`)、wry の `window.ipc.postMessage` が `window.chrome.webview.postMessage` に渡すこと、要求の JSON の形(`cmd`・`callback`・`error`・`payload`)、Rust からの応答の `window.__TAURI_INTERNALS__.runCallback(id, data)` の `eval` と、それが引く `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)、内部 API の `plugin:event|listen`、配信オリジン `http://tauri.localhost`、wry が WebView2 に渡す既定の追加引数)→ `AppProbes`(IPC の観測の方式を含む)、起動の確認、1.5 のブラウザプロセスのコマンドラインの比較を見直す
-- 製品の CSP(`tauri.conf.json` の `app.security.csp`)の `connect-src` の変更(`ipc:`・`http://ipc.localhost` を許すと IPC が Tauri の想定する `fetch` 方式になり、`chrome.webview.postMessage` を通らなくなる)→ `AppProbes` の観測の方式(`window.fetch` の記録への切り替え)を見直す
+- 製品の CSP(`tauri.conf.json` の `app.security.csp`)の `connect-src` の変更(`ipc:`・`http://ipc.localhost` を許すと IPC が Tauri の想定する `fetch` 方式になり、`chrome.webview.postMessage` を通らなくなる)→ `AppProbes` の観測の方式(`window.fetch` の記録への切り替え)を見直す(対応済み: `connect-src 'self' ipc: http://ipc.localhost` を足し、IPC は fetch 方式で流れる。観測は `window.fetch` の記録が主になった)
 - 実行ファイル名(`brainfuck-studio`)・`CARGO_TARGET_DIR` の扱いの変更 → `paths.ts` を見直す
 - 本 spec の `WebviewApp` の形を変える → 下流(compiler-comparison が同じ基盤に足す場合)が再検証する
 - `src-tauri` への path 依存 crate の追加(例: compiler-comparison の `brainfuck-compare-api`)→ ワークフローの `paths` の絞り込みを見直す
@@ -296,7 +296,7 @@ sequenceDiagram
 ```typescript
 /** 組み込みの画面の配信オリジン(Windows の Tauri 2 の既定) */
 export const APP_ORIGIN = "http://tauri.localhost";
-/** Tauri の `fetch` 方式の IPC の宛先の接頭辞(コマンド名がパスに入る)。製品の CSP の下では使われず(postMessage に切り替わる)、AppProbes の保険の記録(`window.fetch` の包み込み)だけが使う */
+/** Tauri の `fetch` 方式の IPC の宛先の接頭辞(コマンド名がパスに入る)。製品の CSP が `connect-src` で許すため、AppProbes の記録(`window.fetch` の包み込み)が使う */
 export const IPC_URL_PREFIX = "http://ipc.localhost/";
 export const APP_EXE_NAME = "brainfuck-studio.exe";
 /** E2E_APP_BIN > CARGO_TARGET_DIR/debug > apps/desktop/src-tauri/target/debug の順 */
@@ -446,8 +446,9 @@ export function bypassAppSuppression(page: Page, kinds: readonly ("keydown" | "c
 - イベント名は `src/ipc/backend.ts` の `CLOSE_REQUESTED_EVENT` を使う
 - `armResponse` は「await で待ち受けを確定し、操作し、その後 `completed` を await する」順で使う(5.6)
 - 起動時の IPC は `plugin:event|listen` だけで、CDP の接続より前に終わる。`load_source` は Run の開始の流れ(`runController`)からだけ、`set_document_dirty` は未保存の旗が変わったときだけ呼ばれる。そのため観測の確認は「接続後の編集」(`set_document_dirty`)と「Run の後」(`load_source`・`start_session`・`run_batch`)で行い、起動時の要求は観測の対象にしない
-- 実アプリの IPC の経路(実測。Tauri 2.12、WebView2): 製品の CSP(`connect-src` 未指定で `default-src 'self'` に落ちる)が Tauri の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否するため、Tauri は起動時に `customProtocolIpcFailed` で postMessage の方式に切り替える(`console.warn('IPC custom protocol failed, Tauri will now use the postMessage interface instead')`)。要求は `window.ipc.postMessage`(wry の `Object.freeze({ postMessage: s => window.chrome.webview.postMessage(s) })`)に JSON 文字列(`{"cmd":"set_document_dirty","callback":<id>,"error":<id>,"options":{"customProtocolIpcBlocked":true},"payload":{...}}`)で渡り、Rust はコマンドの処理を終えてから `webview.eval("window.__TAURI_INTERNALS__.runCallback(id, data)")` で応答を返す(`tauri/src/ipc/format_callback.rs`)。IPC はネットワーク要求にならない
-- IPC の観測の方式は postMessage の方式だけとする(シナリオは `IpcObserver` だけに依存し、方式を知らない):
+- 実アプリの IPC の経路(実測。Tauri 2.12、WebView2。`connect-src` を足す前の実測で、現在の経路は次の「現在の経路」の項を参照): 追加前の製品の CSP(`connect-src` 未指定で `default-src 'self'` に落ちる)が Tauri の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否するため、Tauri は起動時に `customProtocolIpcFailed` で postMessage の方式に切り替える(`console.warn('IPC custom protocol failed, Tauri will now use the postMessage interface instead')`)。要求は `window.ipc.postMessage`(wry の `Object.freeze({ postMessage: s => window.chrome.webview.postMessage(s) })`)に JSON 文字列(`{"cmd":"set_document_dirty","callback":<id>,"error":<id>,"options":{"customProtocolIpcBlocked":true},"payload":{...}}`)で渡り、Rust はコマンドの処理を終えてから `webview.eval("window.__TAURI_INTERNALS__.runCallback(id, data)")` で応答を返す(`tauri/src/ipc/format_callback.rs`)。IPC はネットワーク要求にならない
+- 現在の経路(`connect-src` 追加後): 製品の CSP が `connect-src 'self' ipc: http://ipc.localhost` を許すため、IPC は fetch 方式(`http://ipc.localhost/<cmd>`、ネットワーク要求)で流れ、postMessage には切り替わらない。観測の要求・完了は、主に `window.fetch` の包み込みが記録する。postMessage の包み込みは、Tauri がフォールバックしたときのために残す。方式の名前 `postMessage` は既存の観測との互換のため変えていない
+- IPC の観測の仕組み(シナリオは `IpcObserver` だけに依存し、方式を知らない):
   - 設置: フィクスチャが接続後に `page.evaluate` で `installIpcRecorder` を適用する。リロードしない(起動直後のアプリの状態を保つ)。設置の時点で `__TAURI_INTERNALS__.callbacks instanceof Map` と `window.chrome.webview.postMessage` が関数であることを確かめ、満たさなければ理由つきで失敗させる(Tauri の内部 API の変更を早く検出する)
   - 要求の記録: `window.chrome.webview.postMessage`(書き換え可能)を包み、JSON から `cmd`・`callback`・`error` を取り、ページ内の記録に `{ id, cmd, done: 0 }` を足してから元の関数に同じ文字列を渡す。解析できない文字列は記録せずにそのまま渡す
   - 完了の記録: `__TAURI_INTERNALS__.callbacks`(Map のインスタンス)に自前の `get` を置き、`runCallback` が記録済みの callback または error の id を引いた時点で `done = ++seq` と成否(callback なら成功、error なら失敗)を記録し、元の `get` の結果を返す。Rust はコマンドの処理を終えてから `eval` するため、`done` は「Rust 側の処理が終わって応答が返った」ことを意味する。5.6 と 4.2 の確認の根拠は「postMessage の要求と、Rust からの `runCallback` の応答」になる

@@ -625,7 +625,7 @@ pub fn display_name(path: &std::path::Path) -> String;                     // �
   - I/O 失敗は `ApiError { kind: "io", message: "failed to <read|write> file: <OS のエラー文>" }`(パスを含めない。標準ライブラリの `io::Error` の `Display` は OS 文のみ)
 - `window.rs`: `CloseRequested` で `dirty` なら `prevent_close()` して `close-requested` イベントを発行。未保存でなければそのまま閉じる(フロントが応答しない場合でも閉じられる)
 - `build.rs` の `AppManifest::commands` に全コマンドを列挙し、`capabilities/default.json` は `core:event:default` と列挙したコマンドの許可のみ(`fs` / `shell` / `http` / `dialog`(JS)/ `core:window:*` の破棄などは付与しない)
-- `tauri.conf.json`: ウィンドウ `minWidth: 800` / `minHeight: 600`、CSP `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`(IPC 用の接続先は Tauri が付与)、`withGlobalTauri: false`
+- `tauri.conf.json`: ウィンドウ `minWidth: 800` / `minHeight: 600`、CSP `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost`(IPC の接続先のみ追加。Tauri 2 の CSP の例と同じ値)、`withGlobalTauri: false`
 
 **Contracts**: API [x] / Event [x]
 

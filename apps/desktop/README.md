@@ -508,7 +508,7 @@ Windows の `autocrlf` 設定によっては、内容が同じでも改行コー
 
 実装で分かった事実:
 
-- **IPC の観測は postMessage 方式です。** 製品の CSP(`connect-src` 未指定)が Tauri の `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)を拒否するため、Tauri は `window.chrome.webview.postMessage` に自動で切り替わり、応答は `__TAURI_INTERNALS__.runCallback` で返ります。ネットワーク要求の観測も `invoke` の包み込みも実アプリでは成立しませんでした(`research.md` に根拠)。実アプリは毎回起動時に、`fetch` の IPC が拒否されたことを示す `console.warn` を出しますが、機能には影響しません(CSP に `connect-src 'self' ipc: http://ipc.localhost` を足すと Tauri が想定する `fetch` 方式になりますが、製品の変更でこの feature の範囲外です)。
+- **IPC の観測は fetch 方式の記録を使います。** 製品の CSP は `connect-src 'self' ipc: http://ipc.localhost` を許すため、Tauri は `fetch` 方式の IPC(`http://ipc.localhost/<cmd>`)で要求し、応答はその `fetch` の結果で返ります。観測は `window.fetch` の包み込みで要求と完了を記録します。CSP が拒否されて Tauri が `window.chrome.webview.postMessage` に切り替えた場合の記録も残しています(`research.md` に根拠)。`connect-src` を変えるときは、この観測も見直してください。
 - **既定のコンテキストメニューの検出**: 最初の実装は UI Automation のルート直下の `Menu` を探しており、メニューが出ていても常に偽でした(11.7 の否定が何があっても合格する状態)。陽性対照が見つけ、`Chrome_WidgetWin_*` の最上位ウィンドウを列挙して UIA の部分木から `Menu` を探す形に直しました。
 - **前面化**: Windows の前面化ロックで `AppActivate` だけでは実アプリが前面にならず、OS のキー入力が失敗しました。復元と `AttachThreadInput` による `SetForegroundWindow` を足しました(入力を送らずに前面化を試し、前面にならなければ何も送らずに失敗する。送信の直前直後に前面を再確認する)。
 - 新しくビルドした実行ファイルは、この開発 PC で Avast に止められずに起動できました(以前は、新しくビルドした別の実行ファイルが固まったことがあります)。固まる場合は「トラブルシューティング」を参照してください。
